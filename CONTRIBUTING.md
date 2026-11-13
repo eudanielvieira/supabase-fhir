@@ -15,7 +15,8 @@ bun run sql:build      # regenerate sql/dist after touching a migration
 ```
 
 All of them must pass. CI runs the same commands and also compiles `examples/go` and
-`examples/python` and lints `examples/php`.
+`examples/python`, `examples/java`, `examples/csharp`, lints `examples/php` and `examples/ruby`
+and typechecks `examples/nestjs` and `examples/elysia`.
 
 ## Rules
 

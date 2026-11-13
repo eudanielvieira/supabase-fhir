@@ -8,7 +8,7 @@ README.md; this is the short, operational version.
 
 A FHIR R4 starter for Supabase and plain Postgres: SQL migrations (schema, row level security,
 audit log, version history, RPC API) with a language-neutral HTTP contract (`docs/api.md`), a
-TypeScript client and Go, Python and PHP examples. It is a template to copy, not an npm package.
+TypeScript client, NestJS and Elysia backends and Go, Python, PHP, Java, C# and Ruby examples. It is a template to copy, not an npm package.
 
 ## Map
 
@@ -29,7 +29,8 @@ TypeScript client and Go, Python and PHP examples. It is a template to copy, not
 | `clients/typescript/src/application/ports.ts` | `FhirRepository` interface |
 | `clients/typescript/src/infrastructure/supabase/` | `Database` type for supabase-js and `createFhirClient()` |
 | `clients/typescript/tests/` | unit tests, run with `bun test` |
-| `examples/go/`, `examples/python/`, `examples/php/` | standard-library clients; CI compiles or lints them |
+| `examples/nestjs/`, `examples/elysia/` | backends that forward the user JWT (workspaces of the root package.json) |
+| `examples/go/`, `examples/python/`, `examples/php/`, `examples/java/`, `examples/csharp/`, `examples/ruby/` | standard-library clients; CI compiles or lints them |
 | `scripts/` | Synthea loaders |
 | `dxspec/backlog.md` | use cases `UC-NNN` for this project (in Portuguese) |
 
@@ -54,7 +55,8 @@ TypeScript client and Go, Python and PHP examples. It is a template to copy, not
    TypeScript client, `tests/http/conformance.sh` and the pgTAP tests together.
 10. **Run `bun run sql:build` after touching a migration** and commit `sql/dist/`.
 11. **These must pass before you are done:** `bun run typecheck`, `bun test`, `supabase test db`,
-    `bun run test:http` (stack up), `go vet` in `examples/go` and `php -l examples/php/example.php`.
+    `bun run test:http` (stack up), and the example checks CI runs (`tsc` for nestjs and elysia, `go vet`,
+    `py_compile`, `php -l`, `ruby -c`, `mvn compile`, `dotnet build`).
 
 ## Recipes
 
@@ -106,7 +108,7 @@ await fhir.importBundle(bundle);                  // transaction or batch
 fhir.from('Condition').select('resource').eq('clinical_status', 'active');   // raw typed builder
 ```
 
-Errors are `FhirError` with `status` 400, 403, 404, 409 or 500.
+Errors are `FhirError` with `status` 400, 401, 403, 404, 409 or 500.
 
 ### Query directly in SQL
 
@@ -154,7 +156,8 @@ bun run test:db        # pgTAP
 bun run db:reset
 bun run test:http      # HTTP conformance against the running stack
 bun run sql:build      # regenerate sql/dist after touching migrations
-bun run example:go     # or example:python, example:php, against the running stack
+bun run example:go     # or example:python, example:php, example:java, example:csharp, example:ruby
+bun run example:nestjs # or example:elysia: a backend on :3000 forwarding the user JWT
 bun run seed:build --dir data/synthea/fhir --patients 4
 bun run seed:synthea --dir data/synthea/fhir --limit 20
 ```

@@ -24,7 +24,7 @@ what. This repository is that foundation, written once, tested, and free to copy
 | History | `fhir.resource_history` | Every prior version of every resource, FHIR `_history` style |
 | FHIR operations | `fhir.*` RPC functions | read, create, update with optimistic locking, delete, history, Patient `$everything`, Bundle import. Errors are FHIR `OperationOutcome` |
 | HTTP contract | [`docs/api.md`](docs/api.md) | Every call as `curl`, plus the OpenAPI document PostgREST serves. Works from any language |
-| Clients | `clients/typescript/`, `examples/go/`, `examples/python/`, `examples/php/` | A typed TypeScript client, and dependency-free Go, Python and PHP examples |
+| Clients | `clients/typescript/`, `examples/` | A typed TypeScript client, NestJS and Elysia backends that forward the user JWT, and dependency-free Go, Python, PHP, Java, C# and Ruby examples |
 | Plain Postgres | `sql/compat/`, `sql/dist/` | Run it without Supabase: a compatibility layer and the schema as one file |
 | Synthetic data | `supabase/seeds/` | 4 Synthea patients with 500+ resources, the providers they reference, and 3 demo logins |
 | Tests | `supabase/tests/`, `tests/http/`, `clients/typescript/tests/` | 111 pgTAP assertions, an HTTP conformance suite through PostgREST, unit tests for the client |
@@ -40,7 +40,8 @@ What the starter is built to do, in plain words. The full list with priorities l
 - An admin grants and revokes access, reads the audit log and maintains reference data.
 - A compliance reviewer answers "who touched this patient and when" from `fhir.audit_log` and `fhir.history()`.
 - A backend imports FHIR Bundles from Synthea or an EHR with references resolved and the import idempotent.
-- Any app, in any language, uses the same HTTP contract: TypeScript, Go, Python, PHP, or a client generated from OpenAPI.
+- Any app, in any language, uses the same HTTP contract: TypeScript, Go, Python, PHP, Java, C#, Ruby, or a client generated from OpenAPI.
+- A backend (NestJS, Elysia or any framework) forwards the user JWT and lets the database enforce access instead of holding the service role key.
 
 ## Quickstart
 
@@ -95,9 +96,12 @@ const vitals = await fhir.search('Observation', { patientId: patient.id!, where:
 const bundle = await fhir.everything(patient.id!);                  // Patient $everything
 ```
 
-**Go**, **Python** and **PHP**: `bun run example:go`, `bun run example:python`, `bun run example:php`.
-All three use only the standard library and fit on one screen ([examples/go](examples/go),
-[examples/python](examples/python), [examples/php](examples/php)).
+**A backend in front of it**: [examples/nestjs](examples/nestjs) and [examples/elysia](examples/elysia)
+forward the caller's JWT, so RLS runs as the end user and the API never holds the service role key.
+
+**Go, Python, PHP, Java, C#, Ruby**: `bun run example:go` (or `example:python`, `example:php`,
+`example:java`, `example:csharp`, `example:ruby`). Each fits on one screen and uses the standard
+library of its language (Java adds Jackson for JSON). See [examples/](examples).
 
 **Anything else**: generate a client from the OpenAPI document PostgREST serves, or call the
 RPCs from SQL. Both are in [docs/api.md](docs/api.md).
@@ -240,9 +244,14 @@ both answer 404, so ids cannot be enumerated.
 | Language | Where | Notes |
 |---|---|---|
 | TypeScript | `clients/typescript/` | `Database` type for supabase-js with `resource` typed per table via `@types/fhir`, and `createFhirClient()` with `read`, `create`, `update`, `remove`, `history`, `search`, `everything`, `importBundle`. Errors are `FhirError` with `status` and `outcome` |
-| Go | `examples/go/` | 150 lines, standard library. Login, list, audited read, search, error handling |
-| Python | `examples/python/` | Same flow, standard library |
-| PHP | `examples/php/` | Same flow, PHP 8.1+ with streams only; drops into Laravel or Symfony as a service |
+| NestJS | `examples/nestjs/` | request-scoped `FhirService` built from the `Authorization` header, exception filter mapping `FhirError` to status plus OperationOutcome, a `patients` controller |
+| Elysia (Bun) | `examples/elysia/` | the same pattern in 70 lines: `derive` builds the client per request, `onError` maps errors |
+| Go | `examples/go/` | standard library. Login, list, audited read, search, error handling |
+| Python | `examples/python/` | same flow, standard library; drops into Django or FastAPI |
+| PHP | `examples/php/` | same flow, PHP 8.1+ with streams only; drops into Laravel or Symfony |
+| Java | `examples/java/` | JDK `HttpClient` plus Jackson, Maven; becomes a Spring bean |
+| C# | `examples/csharp/` | .NET 8, `HttpClient` and `System.Text.Json`; register through `IHttpClientFactory` in ASP.NET Core |
+| Ruby | `examples/ruby/` | `net/http` and `json`; becomes a Rails service object |
 | Others | `docs/api.md` | Generate from OpenAPI, or call the functions from SQL with the user's claims set |
 
 The TypeScript `Database` type merges with your own: `type Database = AppDatabase & FhirDatabase`.
@@ -277,7 +286,7 @@ bun run test:http   # the same guarantees seen from outside, through PostgREST (
 The pgTAP suite is the contract: a patient cannot read another compartment, read-only grants
 cannot write, expired grants stop working, anonymous gets nothing, `user_metadata` cannot fake an
 admin, every write is versioned and audited. The HTTP suite checks that any client sees exactly
-that. CI runs all of it on every push, plus the Go, Python and PHP examples.
+that. CI runs all of it on every push, and compiles or lints every example.
 
 ## Use it in your project
 
