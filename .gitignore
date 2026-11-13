@@ -44,3 +44,8 @@ supabase/.branches/
 # the single-file SQL distribution is a committed artifact (bun run sql:build)
 !sql/dist/
 !sql/dist/*
+
+# build output of the examples
+examples/csharp/bin/
+examples/csharp/obj/
+examples/java/target/
