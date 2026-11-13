@@ -1,7 +1,8 @@
 # supabase-fhir
 
 FHIR R4 on Supabase, ready to clone. Postgres schema, row level security per patient, audit log,
-version history and TypeScript types, seeded with synthetic patients from Synthea.
+version history and a FHIR-flavoured API, seeded with synthetic patients from Synthea.
+Postgres first: the rules live in the database, so any language talks to it over HTTP or SQL.
 
 [![ci](https://github.com/eudanielvieira/supabase-fhir/actions/workflows/ci.yml/badge.svg)](https://github.com/eudanielvieira/supabase-fhir/actions/workflows/ci.yml)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
@@ -21,10 +22,12 @@ what. This repository is that foundation, written once, tested, and free to copy
 | Access control | `fhir.patient_access` and RLS policies | A user sees only the patient compartments they were granted. Admins see everything. Anonymous sees nothing |
 | Audit log | `fhir.audit_log` | Every create, update, delete and audited read: who, when, which resource, which patient, from where |
 | History | `fhir.resource_history` | Every prior version of every resource, FHIR `_history` style |
-| FHIR operations | `fhir.*` RPC functions | read, create, update with optimistic locking, delete, history, Patient `$everything`, transaction Bundle import |
-| TypeScript | `src/` | A `Database` type for supabase-js with `resource` typed per table, and a small client around the RPCs |
+| FHIR operations | `fhir.*` RPC functions | read, create, update with optimistic locking, delete, history, Patient `$everything`, Bundle import. Errors are FHIR `OperationOutcome` |
+| HTTP contract | [`docs/api.md`](docs/api.md) | Every call as `curl`, plus the OpenAPI document PostgREST serves. Works from any language |
+| Clients | `clients/typescript/`, `examples/go/`, `examples/python/` | A typed TypeScript client, and dependency-free Go and Python examples |
+| Plain Postgres | `sql/compat/`, `sql/dist/` | Run it without Supabase: a compatibility layer and the schema as one file |
 | Synthetic data | `supabase/seeds/` | 4 Synthea patients with 500+ resources, the providers they reference, and 3 demo logins |
-| Tests | `supabase/tests/`, `tests/` | 109 pgTAP assertions on RLS, triggers and import, plus unit tests for the client |
+| Tests | `supabase/tests/`, `tests/http/`, `clients/typescript/tests/` | 111 pgTAP assertions, an HTTP conformance suite through PostgREST, unit tests for the client |
 
 ## Use cases
 
@@ -37,7 +40,7 @@ What the starter is built to do, in plain words. The full list with priorities l
 - An admin grants and revokes access, reads the audit log and maintains reference data.
 - A compliance reviewer answers "who touched this patient and when" from `fhir.audit_log` and `fhir.history()`.
 - A backend imports FHIR Bundles from Synthea or an EHR with references resolved and the import idempotent.
-- A frontend uses supabase-js with typed FHIR resources, optimistic locking and `$everything`.
+- Any app, in any language, uses the same HTTP contract: TypeScript, Go, Python, or a client generated from OpenAPI.
 
 ## Quickstart
 
@@ -53,27 +56,6 @@ bun run db:start      # starts Supabase locally, applies migrations and seeds
 `db:start` prints the API URL, the anon key and the service role key. Open Studio at
 http://127.0.0.1:54323, pick the `fhir` schema and the seeded patients are there.
 
-From TypeScript:
-
-```ts
-import { createClient } from '@supabase/supabase-js';
-import { createFhirClient, type Database } from './src';
-
-const supabase = createClient<Database>(process.env.SUPABASE_URL!, process.env.SUPABASE_ANON_KEY!);
-await supabase.auth.signInWithPassword({ email: 'clinician@example.com', password: 'supabase-fhir' });
-
-const fhir = createFhirClient(supabase);
-
-const patients = await fhir.search('Patient');                      // only the ones this user may see
-const patient = await fhir.read('Patient', patients[0]!.id!);       // audited read
-const vitals = await fhir.search('Observation', {
-  patientId: patient.id!,
-  where: { category_code: 'vital-signs' },
-  limit: 20,
-});
-const bundle = await fhir.everything(patient.id!);                  // Patient $everything
-```
-
 Demo logins (local only, password `supabase-fhir` for all three):
 
 | Email | Role | Sees |
@@ -82,11 +64,49 @@ Demo logins (local only, password `supabase-fhir` for all three):
 | `clinician@example.com` | clinician | the four seeded patients, read and write |
 | `admin@example.com` | admin | everything, including the audit log |
 
+Then pick a language.
+
+**curl** (the contract everything else is built on, see [docs/api.md](docs/api.md)):
+
+```bash
+JWT=$(curl -s "$SUPABASE_URL/auth/v1/token?grant_type=password" -H "apikey: $SUPABASE_ANON_KEY" \
+  -H "Content-Type: application/json" -d '{"email":"clinician@example.com","password":"supabase-fhir"}' | jq -r .access_token)
+
+curl -s "$SUPABASE_URL/rest/v1/patient?select=id,family_name,birth_date" \
+  -H "apikey: $SUPABASE_ANON_KEY" -H "Authorization: Bearer $JWT" -H "Accept-Profile: fhir"
+
+curl -s "$SUPABASE_URL/rest/v1/rpc/read_resource" -H "Content-Profile: fhir" -H "Content-Type: application/json" \
+  -H "apikey: $SUPABASE_ANON_KEY" -H "Authorization: Bearer $JWT" -d '{"resource_type":"Patient","id":"<id>"}'
+```
+
+**TypeScript** (`clients/typescript/`):
+
+```ts
+import { createClient } from '@supabase/supabase-js';
+import { createFhirClient, type Database } from './clients/typescript/src';
+
+const supabase = createClient<Database>(process.env.SUPABASE_URL!, process.env.SUPABASE_ANON_KEY!);
+await supabase.auth.signInWithPassword({ email: 'clinician@example.com', password: 'supabase-fhir' });
+
+const fhir = createFhirClient(supabase);
+const patients = await fhir.search('Patient');                      // only the ones this user may see
+const patient = await fhir.read('Patient', patients[0]!.id!);       // audited read
+const vitals = await fhir.search('Observation', { patientId: patient.id!, where: { category_code: 'vital-signs' }, limit: 20 });
+const bundle = await fhir.everything(patient.id!);                  // Patient $everything
+```
+
+**Go** and **Python**: `bun run example:go`, `bun run example:python`. Both use only the standard
+library and fit on one screen ([examples/go](examples/go), [examples/python](examples/python)).
+
+**Anything else**: generate a client from the OpenAPI document PostgREST serves, or call the
+RPCs from SQL. Both are in [docs/api.md](docs/api.md).
+
 ## Is this a library?
 
-Not yet. It is a starter: SQL you copy into your Supabase project and a few TypeScript files you
-copy into your app. See [Use it in your project](#use-it-in-your-project). If there is enough
-interest, `src/` becomes an npm package.
+No, and that is the point. The product is the database: migrations you apply to Supabase (or to
+any Postgres with the compatibility layer) and an HTTP contract any language can use. The
+TypeScript client is one adapter among others and may become an npm package later. See
+[Use it in your project](#use-it-in-your-project).
 
 ## How data is stored
 
@@ -183,9 +203,9 @@ order by occurred_at desc;
 ```
 
 Reads are audited when they go through `fhir.read_resource()` or `fhir.patient_everything()`,
-which is what the TypeScript client uses. A plain `select` through PostgREST is not audited at
-row level, because Postgres has no select triggers. For those, use the Supabase API logs or route
-reads through the RPCs. The log stores identifiers only, never the resource payload.
+which is what the clients use. A plain `select` through PostgREST is not audited at row level,
+because Postgres has no select triggers. For those, use the Supabase API logs or route reads
+through the RPCs. The log stores identifiers only, never the resource payload.
 
 History keeps every superseded version, including the last one before a delete:
 
@@ -194,48 +214,36 @@ select version_id, operation, last_updated, resource
 from fhir.history('Patient', '<id>');
 ```
 
-## FHIR operations (RPC)
+## FHIR operations and errors
 
-Call them with `supabase.schema('fhir').rpc(...)` or through the TypeScript client. They run as
-the signed-in user, so RLS always applies.
+Every operation is a Postgres function, callable as `POST /rest/v1/rpc/<name>` or from SQL.
+They run as the signed-in user, so RLS always applies. [docs/api.md](docs/api.md) has the full
+contract with `curl` examples; the short version:
 
-| Function | Does | Errors |
-|---|---|---|
-| `read_resource(resource_type, id)` | returns the resource and logs a read | `PT404` |
-| `create_resource(resource)` | inserts and returns the stored resource with `id` and `meta` | `PT400`, `42501` |
-| `update_resource(resource, expected_version)` | full replace; `expected_version` gives optimistic locking (If-Match) | `PT404`, `PT409`, `42501` |
-| `delete_resource(resource_type, id)` | deletes; the last version stays in history | `PT404`, `42501` |
-| `history(resource_type, id)` | every version, newest first | `PT400` |
-| `patient_everything(patient_id)` | a Bundle with the whole compartment the caller may see | `PT404` |
-| `import_bundle(bundle)` | transaction or batch import: resolves `urn:uuid` and `Type?identifier=` references, honours `ifNoneExist`, upserts by id | `PT400`, `42501` |
-
-PostgREST turns `PT400`, `PT404` and `PT409` into HTTP 400, 404 and 409, and `42501` into 403.
-Not found and not allowed both answer 404, so ids cannot be enumerated.
-
-## TypeScript
-
-`src/` depends on `@supabase/supabase-js` at runtime and on `@types/fhir` for the resource types.
-
-```ts
-import type { Database as AppDatabase } from './supabase.types'; // your generated types, if any
-import type { FhirDatabase } from './src';
-
-type Database = AppDatabase & FhirDatabase;
-```
-
-| Method | Returns |
+| Function | Does |
 |---|---|
-| `read(type, id)` | the typed resource (`fhir4.Patient`, `fhir4.Observation`, ...) |
-| `create(resource)`, `update(resource, { expectedVersion })` | the stored resource |
-| `remove(type, id)` | nothing |
-| `history(type, id)` | `{ versionId, resource, lastUpdated, operation }[]` |
-| `search(type, { patientId, where, limit, order })` | resources from the table, filtered on the search columns |
-| `everything(patientId)` | a FHIR Bundle |
-| `importBundle(bundle)` | the response Bundle |
-| `from(type)` | the typed PostgREST query builder for that table |
-| `schema` | the raw typed client for the `fhir` schema |
+| `read_resource(resource_type, id)` | returns the resource and logs a read |
+| `create_resource(resource)` | inserts and returns the stored resource with `id` and `meta` |
+| `update_resource(resource, expected_version)` | full replace; `expected_version` gives optimistic locking (If-Match) |
+| `delete_resource(resource_type, id)` | deletes; the last version stays in history |
+| `history(resource_type, id)` | every version, newest first |
+| `patient_everything(patient_id)` | a Bundle with the whole compartment the caller may see |
+| `import_bundle(bundle)` | transaction or batch import: resolves `urn:uuid` and `Type?identifier=` references, honours `ifNoneExist`, upserts by id |
 
-Errors are `FhirError` with `status` (400, 403, 404, 409 or 500) and the original Postgres `code`.
+Errors come back with an HTTP status (400, 403, 404, 409) and a FHIR `OperationOutcome` in the
+response `details`, so a FHIR library in any language understands them. Not found and not allowed
+both answer 404, so ids cannot be enumerated.
+
+## Clients
+
+| Language | Where | Notes |
+|---|---|---|
+| TypeScript | `clients/typescript/` | `Database` type for supabase-js with `resource` typed per table via `@types/fhir`, and `createFhirClient()` with `read`, `create`, `update`, `remove`, `history`, `search`, `everything`, `importBundle`. Errors are `FhirError` with `status` and `outcome` |
+| Go | `examples/go/` | 150 lines, standard library. Login, list, audited read, search, error handling |
+| Python | `examples/python/` | Same flow, standard library |
+| Others | `docs/api.md` | Generate from OpenAPI, or call the functions from SQL with the user's claims set |
+
+The TypeScript `Database` type merges with your own: `type Database = AppDatabase & FhirDatabase`.
 
 ## Synthetic data
 
@@ -261,23 +269,36 @@ SUPABASE_URL=http://127.0.0.1:54321 SUPABASE_SERVICE_ROLE_KEY=... \
 ```bash
 bun test            # domain and client, no database needed
 bun run test:db     # pgTAP against the local database: RLS, triggers, import, API
+bun run test:http   # the same guarantees seen from outside, through PostgREST (needs the stack up)
 ```
 
 The pgTAP suite is the contract: a patient cannot read another compartment, read-only grants
 cannot write, expired grants stop working, anonymous gets nothing, `user_metadata` cannot fake an
-admin, every write is versioned and audited. CI runs both suites on every push.
+admin, every write is versioned and audited. The HTTP suite checks that any client sees exactly
+that. CI runs all of it on every push, plus the Go and Python examples.
 
 ## Use it in your project
 
-1. Copy `supabase/migrations/*_fhir_*.sql` into your `supabase/migrations/`, keeping the order.
+**On Supabase**
+
+1. Copy `supabase/migrations/*_fhir_*.sql` into your `supabase/migrations/`, keeping the order
+   (or apply `sql/dist/supabase-fhir.sql` as a single migration).
 2. Expose the schema: add `"fhir"` to `schemas` under `[api]` in `supabase/config.toml`, and on
    hosted projects under Project Settings > API > Exposed schemas.
-3. Copy `src/`, or only `src/infrastructure/supabase/database.types.ts` if you just want the types.
-4. Run `supabase db push`, insert access rows for your users, set the admin claim for your operators.
+3. Run `supabase db push`, insert access rows for your users, set the admin claim for your operators.
+4. Pick a client: copy `clients/typescript/src/`, adapt an example, or generate one from OpenAPI.
 5. Leave `supabase/seeds/` behind: demo users and synthetic patients are for local development.
 
+**On plain Postgres** (any host, with or without PostgREST)
+
+1. Run `sql/compat/plain-postgres.sql` once as a superuser: it creates the roles and the `auth`
+   helpers the policies rely on.
+2. Apply `sql/dist/supabase-fhir.sql`.
+3. Put PostgREST in front (`db-schemas = fhir`) and issue JWTs yourself, or connect from your
+   backend and set the user's claims per transaction as shown in [docs/api.md](docs/api.md).
+
 Need another resource type? One migration line, plus an entry in `TABLE_NAMES` and `ResourceMap`
-in `src/domain/resource-types.ts`:
+in `clients/typescript/src/domain/resource-types.ts` if you use the TypeScript client:
 
 ```sql
 select fhir.define_resource('Specimen');
@@ -290,7 +311,8 @@ alter table fhir.specimen
 - No profile validation (US Core and friends). The database checks structure and ids, not conformance.
 - No SMART on FHIR scopes. Supabase Auth plus `patient_access` covers patient and clinician apps.
 - Multi-tenant (one database, many organizations) is planned on top of the compartment model.
-- A full FHIR REST facade (`GET /fhir/Patient?...`) would live in an Edge Function; not included.
+- A FHIR REST facade (`GET /fhir/Patient/{id}`, `GET /fhir/Observation?patient=...`) so off-the-shelf
+  FHIR SDKs work unchanged is the next milestone (UC-028 in the backlog).
 - `_history` and `$everything` are here; `$export` is not.
 
 Compliance note: this project gives you technical controls (isolation, audit, versioning).
