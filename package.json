@@ -40,7 +40,16 @@
     "test:http": "bash tests/http/conformance.sh",
     "example:go": "cd examples/go && go run .",
     "example:python": "python3 examples/python/example.py",
-    "example:php": "php examples/php/example.php"
+    "example:php": "php examples/php/example.php",
+    "example:nestjs": "bun run examples/nestjs/src/main.ts",
+    "example:elysia": "bun run examples/elysia/src/index.ts",
+    "example:java": "mvn -q -f examples/java/pom.xml compile exec:java",
+    "example:csharp": "dotnet run --project examples/csharp",
+    "example:ruby": "ruby examples/ruby/example.rb"
   },
-  "type": "module"
+  "type": "module",
+  "workspaces": [
+    "examples/nestjs",
+    "examples/elysia"
+  ]
 }
