@@ -26,10 +26,10 @@ what. This repository is that foundation, written once, tested, and free to copy
 | History | `fhir.resource_history` | Every prior version of every resource, FHIR `_history` style |
 | FHIR operations | `fhir.*` RPC functions | read, create, update with optimistic locking, delete, history, Patient `$everything`, Bundle import. Errors are FHIR `OperationOutcome` |
 | HTTP contract | [`docs/api.md`](docs/api.md) | Every call as `curl`, plus the OpenAPI document PostgREST serves. Works from any language |
-| Clients | `clients/typescript/`, `examples/` | A typed TypeScript client, NestJS and Elysia backends that forward the user JWT, and dependency-free Go, Python, PHP, Java, C# and Ruby examples |
+| Clients | `packages/typescript/`, `examples/` | A typed TypeScript client, NestJS and Elysia backends that forward the user JWT, and dependency-free Go, Python, PHP, Java, C# and Ruby examples |
 | Plain Postgres | `sql/compat/`, `sql/dist/` | Run it without Supabase: a compatibility layer and the schema as one file |
 | Synthetic data | `supabase/seeds/` | 4 Synthea patients with 500+ resources, the providers they reference, and 3 demo logins |
-| Tests | `supabase/tests/`, `tests/http/`, `clients/typescript/tests/` | 111 pgTAP assertions, an HTTP conformance suite through PostgREST, unit tests for the client |
+| Tests | `supabase/tests/`, `tests/http/`, `packages/typescript/tests/` | 111 pgTAP assertions, an HTTP conformance suite through PostgREST, unit tests for the client |
 
 ## Use cases
 
@@ -82,11 +82,11 @@ curl -s "$SUPABASE_URL/rest/v1/rpc/read_resource" -H "Content-Profile: fhir" -H 
   -H "apikey: $SUPABASE_ANON_KEY" -H "Authorization: Bearer $JWT" -d '{"resource_type":"Patient","id":"<id>"}'
 ```
 
-**TypeScript** (`clients/typescript/`):
+**TypeScript** (`packages/typescript/`):
 
 ```ts
 import { createClient } from '@supabase/supabase-js';
-import { createFhirClient, type Database } from './clients/typescript/src';
+import { createFhirClient, type Database } from './packages/typescript/src';
 
 const supabase = createClient<Database>(process.env.SUPABASE_URL!, process.env.SUPABASE_ANON_KEY!);
 await supabase.auth.signInWithPassword({ email: 'clinician@example.com', password: 'supabase-fhir' });
@@ -245,7 +245,7 @@ both answer 404, so ids cannot be enumerated.
 
 | Language | Where | Notes |
 |---|---|---|
-| TypeScript | `clients/typescript/` | `Database` type for supabase-js with `resource` typed per table via `@types/fhir`, and `createFhirClient()` with `read`, `create`, `update`, `remove`, `history`, `search`, `everything`, `importBundle`. Errors are `FhirError` with `status` and `outcome` |
+| TypeScript | `packages/typescript/` | `Database` type for supabase-js with `resource` typed per table via `@types/fhir`, and `createFhirClient()` with `read`, `create`, `update`, `remove`, `history`, `search`, `everything`, `importBundle`. Errors are `FhirError` with `status` and `outcome` |
 | NestJS | `examples/nestjs/` | request-scoped `FhirService` built from the `Authorization` header, exception filter mapping `FhirError` to status plus OperationOutcome, a `patients` controller |
 | Elysia (Bun) | `examples/elysia/` | the same pattern in 70 lines: `derive` builds the client per request, `onError` maps errors |
 | Go | `examples/go/` | standard library. Login, list, audited read, search, error handling |
@@ -299,7 +299,7 @@ that. CI runs all of it on every push, and compiles or lints every example.
 2. Expose the schema: add `"fhir"` to `schemas` under `[api]` in `supabase/config.toml`, and on
    hosted projects under Project Settings > API > Exposed schemas.
 3. Run `supabase db push`, insert access rows for your users, set the admin claim for your operators.
-4. Pick a client: copy `clients/typescript/src/`, adapt an example, or generate one from OpenAPI.
+4. Pick a client: copy `packages/typescript/src/`, adapt an example, or generate one from OpenAPI.
 5. Leave `supabase/seeds/` behind: demo users and synthetic patients are for local development.
 
 **On plain Postgres** (any host, with or without PostgREST)
@@ -311,7 +311,7 @@ that. CI runs all of it on every push, and compiles or lints every example.
    backend and set the user's claims per transaction as shown in [docs/api.md](docs/api.md).
 
 Need another resource type? One migration line, plus an entry in `TABLE_NAMES` and `ResourceMap`
-in `clients/typescript/src/domain/resource-types.ts` if you use the TypeScript client:
+in `packages/typescript/src/domain/resource-types.ts` if you use the TypeScript client:
 
 ```sql
 select fhir.define_resource('Specimen');

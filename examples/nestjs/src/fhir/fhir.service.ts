@@ -2,7 +2,7 @@ import { Inject, Injectable, Scope, UnauthorizedException } from '@nestjs/common
 import { REQUEST } from '@nestjs/core';
 import { createClient } from '@supabase/supabase-js';
 import type { Request } from 'express';
-import { createFhirClient, type Database, type FhirClient } from '../../../../clients/typescript/src';
+import { createFhirClient, type Database, type FhirClient } from '../../../../packages/typescript/src';
 import { env } from '../config';
 
 /**

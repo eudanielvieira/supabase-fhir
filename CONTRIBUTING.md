@@ -23,7 +23,7 @@ and typechecks `examples/nestjs` and `examples/elysia`.
 - **Never weaken a policy without a test.** Every change to RLS, grants or the audit triggers
   needs a pgTAP test in `supabase/tests/` that proves the new behaviour and the old guarantees.
 - **New resource types go in three places:** `select fhir.define_resource('Type')` in a migration,
-  `TABLE_NAMES` plus `ResourceMap` in `clients/typescript/src/domain/resource-types.ts`, and the
+  `TABLE_NAMES` plus `ResourceMap` in `packages/typescript/src/domain/resource-types.ts`, and the
   table list in `docs/api.md`.
 - **The HTTP contract is shared by every client.** A change to an RPC or an error code updates
   `docs/api.md`, `tests/http/conformance.sh`, the TypeScript client and the pgTAP tests together.

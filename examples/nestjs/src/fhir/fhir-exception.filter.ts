@@ -1,6 +1,6 @@
 import { type ArgumentsHost, Catch, type ExceptionFilter } from '@nestjs/common';
 import type { Response } from 'express';
-import { FhirError } from '../../../../clients/typescript/src';
+import { FhirError } from '../../../../packages/typescript/src';
 
 /** Turns a FhirError into the HTTP status and OperationOutcome the database already produced. */
 @Catch(FhirError)

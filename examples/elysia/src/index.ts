@@ -7,7 +7,7 @@
  */
 import { createClient } from '@supabase/supabase-js';
 import { Elysia, t } from 'elysia';
-import { createFhirClient, FhirError, type Database } from '../../../clients/typescript/src';
+import { createFhirClient, FhirError, type Database } from '../../../packages/typescript/src';
 
 function env(name: string): string {
   const value = process.env[name];

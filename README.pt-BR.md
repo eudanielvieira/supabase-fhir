@@ -27,10 +27,10 @@ Este repositório é essa base, escrita uma vez, testada e livre para copiar.
 | Histórico | `fhir.resource_history` | Toda versão anterior de todo recurso, no estilo `_history` do FHIR |
 | Operações FHIR | funções RPC `fhir.*` | read, create, update com lock otimista, delete, history, `$everything` do Patient, importação de Bundle. Erros são `OperationOutcome` FHIR |
 | Contrato HTTP | [`docs/api.md`](docs/api.md) | Cada chamada em `curl`, mais o documento OpenAPI que o PostgREST serve. Funciona em qualquer linguagem |
-| Clientes | `clients/typescript/`, `examples/` | Um cliente TypeScript tipado, backends NestJS e Elysia que repassam o JWT do usuário, e exemplos sem dependências em Go, Python, PHP, Java, C# e Ruby |
+| Clientes | `packages/typescript/`, `examples/` | Um cliente TypeScript tipado, backends NestJS e Elysia que repassam o JWT do usuário, e exemplos sem dependências em Go, Python, PHP, Java, C# e Ruby |
 | Postgres puro | `sql/compat/`, `sql/dist/` | Rode sem Supabase: uma camada de compatibilidade e o schema em um arquivo só |
 | Dados sintéticos | `supabase/seeds/` | 4 pacientes Synthea com mais de 500 recursos, os prestadores que eles referenciam e 3 logins de demonstração |
-| Testes | `supabase/tests/`, `tests/http/`, `clients/typescript/tests/` | 111 asserções pgTAP, uma suíte de conformidade HTTP via PostgREST e testes unitários do cliente |
+| Testes | `supabase/tests/`, `tests/http/`, `packages/typescript/tests/` | 111 asserções pgTAP, uma suíte de conformidade HTTP via PostgREST e testes unitários do cliente |
 
 ## Casos de uso
 
@@ -83,11 +83,11 @@ curl -s "$SUPABASE_URL/rest/v1/rpc/read_resource" -H "Content-Profile: fhir" -H 
   -H "apikey: $SUPABASE_ANON_KEY" -H "Authorization: Bearer $JWT" -d '{"resource_type":"Patient","id":"<id>"}'
 ```
 
-**TypeScript** (`clients/typescript/`):
+**TypeScript** (`packages/typescript/`):
 
 ```ts
 import { createClient } from '@supabase/supabase-js';
-import { createFhirClient, type Database } from './clients/typescript/src';
+import { createFhirClient, type Database } from './packages/typescript/src';
 
 const supabase = createClient<Database>(process.env.SUPABASE_URL!, process.env.SUPABASE_ANON_KEY!);
 await supabase.auth.signInWithPassword({ email: 'clinician@example.com', password: 'supabase-fhir' });
@@ -246,7 +246,7 @@ e "sem permissão" respondem 404 igualmente, para que ids não possam ser enumer
 
 | Linguagem | Onde | Observações |
 |---|---|---|
-| TypeScript | `clients/typescript/` | Tipo `Database` para o supabase-js com `resource` tipado por tabela via `@types/fhir`, e `createFhirClient()` com `read`, `create`, `update`, `remove`, `history`, `search`, `everything`, `importBundle`. Erros são `FhirError` com `status` e `outcome` |
+| TypeScript | `packages/typescript/` | Tipo `Database` para o supabase-js com `resource` tipado por tabela via `@types/fhir`, e `createFhirClient()` com `read`, `create`, `update`, `remove`, `history`, `search`, `everything`, `importBundle`. Erros são `FhirError` com `status` e `outcome` |
 | NestJS | `examples/nestjs/` | `FhirService` com escopo de requisição montado a partir do header `Authorization`, filtro de exceção que mapeia `FhirError` para status mais OperationOutcome, um controller `patients` |
 | Elysia (Bun) | `examples/elysia/` | o mesmo padrão em 70 linhas: `derive` monta o cliente por requisição, `onError` mapeia os erros |
 | Go | `examples/go/` | biblioteca padrão. Login, listagem, leitura auditada, busca, tratamento de erro |
@@ -300,7 +300,7 @@ exatamente isso. O CI roda tudo a cada push e compila ou valida cada exemplo.
 2. Exponha o schema: adicione `"fhir"` em `schemas` dentro de `[api]` no `supabase/config.toml` e,
    em projetos hospedados, em Project Settings > API > Exposed schemas.
 3. Rode `supabase db push`, insira as linhas de acesso dos seus usuários e defina a claim de admin dos operadores.
-4. Escolha um cliente: copie `clients/typescript/src/`, adapte um exemplo ou gere um a partir do OpenAPI.
+4. Escolha um cliente: copie `packages/typescript/src/`, adapte um exemplo ou gere um a partir do OpenAPI.
 5. Deixe `supabase/seeds/` de fora: usuários demo e pacientes sintéticos são só para desenvolvimento local.
 
 **Em Postgres puro** (qualquer host, com ou sem PostgREST)
@@ -312,7 +312,7 @@ exatamente isso. O CI roda tudo a cada push e compila ou valida cada exemplo.
    do seu backend e defina as claims do usuário por transação, como mostra [docs/api.md](docs/api.md).
 
 Precisa de outro tipo de recurso? Uma linha de migration, mais uma entrada em `TABLE_NAMES` e `ResourceMap`
-em `clients/typescript/src/domain/resource-types.ts` se usar o cliente TypeScript:
+em `packages/typescript/src/domain/resource-types.ts` se usar o cliente TypeScript:
 
 ```sql
 select fhir.define_resource('Specimen');

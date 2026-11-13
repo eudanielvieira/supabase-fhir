@@ -2,7 +2,7 @@
 
 Everything in supabase-fhir is reachable over plain HTTP through PostgREST, the API layer
 Supabase runs in front of Postgres. No SDK is required: any language with an HTTP client works.
-The TypeScript client in `clients/typescript/` and the Go and Python examples in `examples/` are
+The TypeScript client in `packages/typescript/` and the Go and Python examples in `examples/` are
 thin wrappers around the calls on this page.
 
 All examples assume:
