@@ -21,10 +21,18 @@ jobs:
         run: bun run sql:build && git diff --exit-code -- sql/dist
 
   examples:
-    name: go, python and php examples compile
+    name: examples compile
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install --frozen-lockfile
+      - name: nestjs
+        run: bunx tsc --noEmit -p examples/nestjs
+      - name: elysia
+        run: bunx tsc --noEmit -p examples/elysia
       - uses: actions/setup-go@v7
         with:
           go-version: '1.22'
@@ -32,6 +40,11 @@ jobs:
       - run: cd examples/go && go vet ./... && go build -o /dev/null .
       - run: python3 -m py_compile examples/python/example.py
       - run: php -l examples/php/example.php
+      - run: ruby -c examples/ruby/example.rb
+      - name: java
+        run: mvn -q -B -f examples/java/pom.xml compile
+      - name: csharp
+        run: dotnet build examples/csharp -c Release --nologo -v q
 
   database:
     name: migrations, seeds, pgTAP and HTTP conformance
