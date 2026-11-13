@@ -32,7 +32,7 @@ TypeScript client, NestJS and Elysia backends and Go, Python, PHP, Java, C# and 
 | `examples/nestjs/`, `examples/elysia/` | backends that forward the user JWT (workspaces of the root package.json) |
 | `examples/go/`, `examples/python/`, `examples/php/`, `examples/java/`, `examples/csharp/`, `examples/ruby/` | standard-library clients; CI compiles or lints them |
 | `scripts/` | Synthea loaders |
-| `dxspec/backlog.md` | use cases `UC-NNN` for this project (in Portuguese) |
+| `docs/design/` | why the project looks the way it does: use cases (`UC-NNN`) and architecture decision records |
 
 ## Invariants: never break these
 
@@ -139,7 +139,7 @@ Prefer generated search columns; fall back to `resource @> '{...}'` (GIN indexed
 - Conventional Commits (`feat:`, `fix:`, `docs:`, `test:`, `chore:`, `ci:`), imperative, lower case.
   No AI attribution lines in commit messages or pull requests.
 - No emojis in code, docs, tests or commits.
-- English in code, SQL and docs. `dxspec/` is in Portuguese by design.
+- English in code, SQL and docs. `README.pt-BR.md` is the only translated file.
 - SQL: lower case keywords, snake_case, functions with `set search_path = ''`, explicit grants and
   revokes, comments on tables and functions.
 - TypeScript: strict, no `any`, named exports, Bun for scripts and tests, Clean Architecture layers

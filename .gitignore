@@ -49,3 +49,6 @@ supabase/.branches/
 examples/csharp/bin/
 examples/csharp/obj/
 examples/java/target/
+
+# personal spec-driven workflow files (the public design notes live in docs/design/)
+dxspec/
