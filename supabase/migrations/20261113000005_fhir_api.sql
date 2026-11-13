@@ -1,0 +1,438 @@
+-- =============================================================================
+-- supabase-fhir | 0005 RPC API
+-- FHIR-flavoured operations callable with supabase.schema('fhir').rpc(...).
+-- All of them run as the caller (SECURITY INVOKER) so RLS always applies.
+-- Errors use PostgREST status codes: PT400, PT404, PT409 map to HTTP 400/404/409,
+-- and 42501 (insufficient privilege) maps to 403.
+-- =============================================================================
+
+-- Table backing a resource type, or null when it was never defined.
+create or replace function fhir.resource_table(resource_type text)
+returns text
+language sql stable parallel safe
+set search_path = ''
+as $$
+  select t.table_name from fhir.resource_type t where t.resource_type = $1;
+$$;
+
+-- id of the resource of the given type carrying identifier 'system|value' (or just 'value').
+create or replace function fhir.find_by_identifier(resource_type text, identifier text)
+returns text
+language plpgsql stable
+set search_path = ''
+as $$
+declare
+  tbl   text := fhir.resource_table(resource_type);
+  token text := replace(identifier, '%7C', '|');
+  sys   text;
+  val   text;
+  found text;
+begin
+  if tbl is null or token is null or token = '' then
+    return null;
+  end if;
+  if position('|' in token) > 0 then
+    sys := split_part(token, '|', 1);
+    val := substr(token, position('|' in token) + 1);
+  else
+    val := token;
+  end if;
+  execute format('select id from fhir.%I where resource @> $1 limit 1', tbl)
+    into found
+    using jsonb_build_object('identifier', jsonb_build_array(
+      jsonb_strip_nulls(jsonb_build_object('system', nullif(sys, ''), 'value', val))));
+  return found;
+end;
+$$;
+
+-- 'Practitioner?identifier=http://hl7.org/fhir/sid/us-npi|123' -> 'Practitioner/<id>' or null.
+create or replace function fhir.resolve_conditional_reference(reference text)
+returns text
+language plpgsql stable
+set search_path = ''
+as $$
+declare
+  parts text[] := regexp_match(reference, '^([A-Z][A-Za-z]+)\?identifier=(.+)$');
+  found text;
+begin
+  if parts is null then
+    return null;
+  end if;
+  found := fhir.find_by_identifier(parts[1], parts[2]);
+  return case when found is null then null else parts[1] || '/' || found end;
+end;
+$$;
+
+-- -----------------------------------------------------------------------------
+-- read / create / update / delete / history
+-- -----------------------------------------------------------------------------
+
+-- Audited read. Not found and not allowed both answer PT404 (no enumeration).
+create or replace function fhir.read_resource(resource_type text, id text)
+returns jsonb
+language plpgsql
+set search_path = ''
+as $$
+declare
+  tbl             text := fhir.resource_table(resource_type);
+  found_resource  jsonb;
+  found_patient   text;
+  found_version   integer;
+begin
+  if tbl is null then
+    raise exception 'unknown resource type %', resource_type using errcode = 'PT400';
+  end if;
+  execute format('select resource, patient_id, version_id from fhir.%I where id = $1', tbl)
+    into found_resource, found_patient, found_version
+    using id;
+  if found_resource is null then
+    raise exception '%/% not found', resource_type, id using errcode = 'PT404';
+  end if;
+  perform fhir.log_access(resource_type, id, found_patient, found_version);
+  return found_resource;
+end;
+$$;
+
+create or replace function fhir.create_resource(resource jsonb)
+returns jsonb
+language plpgsql
+set search_path = ''
+as $$
+declare
+  rt      text := resource ->> 'resourceType';
+  tbl     text;
+  created jsonb;
+begin
+  if rt is null then
+    raise exception 'resource.resourceType is required' using errcode = 'PT400';
+  end if;
+  tbl := fhir.resource_table(rt);
+  if tbl is null then
+    raise exception 'unknown resource type %', rt using errcode = 'PT400';
+  end if;
+  execute format('insert into fhir.%I (resource) values ($1) returning resource', tbl)
+    into created
+    using resource;
+  return created;
+end;
+$$;
+
+-- Full replace. Pass expected_version for optimistic locking (FHIR If-Match).
+--   PT404 unknown or invisible, 42501 visible but not writable, PT409 stale version.
+create or replace function fhir.update_resource(resource jsonb, expected_version integer default null)
+returns jsonb
+language plpgsql
+set search_path = ''
+as $$
+declare
+  rt              text := resource ->> 'resourceType';
+  rid             text := nullif(resource ->> 'id', '');
+  tbl             text;
+  updated         jsonb;
+  current_version integer;
+begin
+  if rt is null or rid is null then
+    raise exception 'resource.resourceType and resource.id are required' using errcode = 'PT400';
+  end if;
+  tbl := fhir.resource_table(rt);
+  if tbl is null then
+    raise exception 'unknown resource type %', rt using errcode = 'PT400';
+  end if;
+
+  if expected_version is null then
+    execute format('update fhir.%I set resource = $1 where id = $2 returning resource', tbl)
+      into updated using resource, rid;
+  else
+    execute format('update fhir.%I set resource = $1 where id = $2 and version_id = $3 returning resource', tbl)
+      into updated using resource, rid, expected_version;
+  end if;
+
+  if updated is null then
+    execute format('select version_id from fhir.%I where id = $1', tbl) into current_version using rid;
+    if current_version is null then
+      raise exception '%/% not found', rt, rid using errcode = 'PT404';
+    elsif expected_version is not null and current_version <> expected_version then
+      raise exception 'version conflict on %/%: expected %, current %', rt, rid, expected_version, current_version
+        using errcode = 'PT409';
+    else
+      raise exception 'no write access to %/%', rt, rid using errcode = '42501';
+    end if;
+  end if;
+  return updated;
+end;
+$$;
+
+create or replace function fhir.delete_resource(resource_type text, id text)
+returns void
+language plpgsql
+set search_path = ''
+as $$
+declare
+  tbl     text := fhir.resource_table(resource_type);
+  deleted integer;
+  visible boolean;
+begin
+  if tbl is null then
+    raise exception 'unknown resource type %', resource_type using errcode = 'PT400';
+  end if;
+  execute format('delete from fhir.%I where id = $1', tbl) using id;
+  get diagnostics deleted = row_count;
+  if deleted = 0 then
+    execute format('select exists (select 1 from fhir.%I where id = $1)', tbl) into visible using id;
+    if visible then
+      raise exception 'no write access to %/%', resource_type, id using errcode = '42501';
+    end if;
+    raise exception '%/% not found', resource_type, id using errcode = 'PT404';
+  end if;
+end;
+$$;
+
+-- Every version of a resource, newest first. operation is 'current', 'update' or 'delete'.
+create or replace function fhir.history(resource_type text, id text)
+returns table (version_id integer, resource jsonb, last_updated timestamptz, operation text)
+language plpgsql stable
+set search_path = ''
+as $$
+declare
+  tbl text := fhir.resource_table(resource_type);
+begin
+  if tbl is null then
+    raise exception 'unknown resource type %', resource_type using errcode = 'PT400';
+  end if;
+  return query execute format($sql$
+    select c.version_id, c.resource, c.last_updated, 'current'::text
+    from fhir.%I c where c.id = $1
+    union all
+    select h.version_id, h.resource, h.last_updated, h.operation
+    from fhir.resource_history h where h.resource_type = $2 and h.id = $1
+    order by 1 desc$sql$, tbl)
+    using id, resource_type;
+end;
+$$;
+
+-- Patient $everything: a searchset Bundle with the whole compartment the caller may see.
+create or replace function fhir.patient_everything(patient_id text)
+returns jsonb
+language plpgsql
+set search_path = ''
+as $$
+declare
+  patient  jsonb;
+  entries  jsonb := '[]'::jsonb;
+  chunk    jsonb;
+  rt       record;
+begin
+  select p.resource into patient from fhir.patient p where p.id = $1;
+  if patient is null then
+    raise exception 'Patient/% not found', patient_id using errcode = 'PT404';
+  end if;
+  perform fhir.log_access('Patient', patient_id, patient_id, (patient #>> '{meta,versionId}')::integer);
+
+  for rt in select t.table_name from fhir.resource_type t where t.compartment order by t.resource_type loop
+    execute format(
+      'select coalesce(jsonb_agg(jsonb_build_object(''resource'', resource) order by last_updated), ''[]''::jsonb)
+       from fhir.%I where patient_id = $1', rt.table_name)
+      into chunk using patient_id;
+    entries := entries || chunk;
+  end loop;
+
+  return jsonb_build_object(
+    'resourceType', 'Bundle',
+    'type', 'searchset',
+    'total', jsonb_array_length(entries),
+    'entry', entries
+  );
+end;
+$$;
+
+-- -----------------------------------------------------------------------------
+-- import_bundle: load a transaction/batch/collection Bundle atomically
+--   * urn:uuid fullUrls become stable ids; references are rewritten to Type/id
+--   * conditional references (Type?identifier=system|value) resolve to Type/id,
+--     first against the bundle itself, then against the database
+--   * request.ifNoneExist with an identifier reuses the existing resource
+--   * entries are upserted by id, so re-importing the same bundle is safe
+--   * request.method DELETE (url 'Type/id') removes the resource
+-- Returns a transaction-response Bundle with one entry per input entry.
+-- -----------------------------------------------------------------------------
+create or replace function fhir.import_bundle(bundle jsonb)
+returns jsonb
+language plpgsql
+set search_path = ''
+as $$
+declare
+  entries   jsonb;
+  n         integer;
+  ids       text[] := '{}';
+  types     text[] := '{}';
+  skip      boolean[] := '{}';
+  ref_map   jsonb := '{}'::jsonb;
+  i         integer;
+  entry     jsonb;
+  res       jsonb;
+  rt        text;
+  tbl       text;
+  method    text;
+  full_url  text;
+  rid       text;
+  cond      text;
+  existing  text;
+  ident     jsonb;
+  txt       text;
+  ref       text;
+  resolved  text;
+  version   integer;
+  url_parts text[];
+  responses jsonb := '[]'::jsonb;
+begin
+  if bundle ->> 'resourceType' is distinct from 'Bundle' then
+    raise exception 'expected a Bundle, got %', coalesce(bundle ->> 'resourceType', 'nothing') using errcode = 'PT400';
+  end if;
+  entries := coalesce(bundle -> 'entry', '[]'::jsonb);
+  if jsonb_typeof(entries) <> 'array' then
+    raise exception 'Bundle.entry must be an array' using errcode = 'PT400';
+  end if;
+  n := jsonb_array_length(entries);
+
+  -- Pass 1: decide the id of every entry and map fullUrls / identifiers to Type/id.
+  for i in 0 .. n - 1 loop
+    entry := entries -> i;
+    method := upper(coalesce(entry #>> '{request,method}', 'POST'));
+
+    if method in ('GET', 'HEAD') then
+      ids := ids || null::text; types := types || null::text; skip := skip || true;
+      continue;
+    end if;
+
+    if method = 'DELETE' then
+      url_parts := regexp_match(coalesce(entry #>> '{request,url}', ''), '^([A-Z][A-Za-z]+)/([A-Za-z0-9\-\.]{1,64})$');
+      if url_parts is null or fhir.resource_table(url_parts[1]) is null then
+        raise exception 'entry %: DELETE needs request.url like Type/id with a known type', i using errcode = 'PT400';
+      end if;
+      ids := ids || url_parts[2]; types := types || url_parts[1]; skip := skip || false;
+      continue;
+    end if;
+
+    res := entry -> 'resource';
+    if res is null or jsonb_typeof(res) <> 'object' then
+      raise exception 'entry % has no resource', i using errcode = 'PT400';
+    end if;
+    rt := res ->> 'resourceType';
+    tbl := fhir.resource_table(rt);
+    if tbl is null then
+      raise exception 'unknown resource type % at entry % (define it with fhir.define_resource)', rt, i using errcode = 'PT400';
+    end if;
+
+    full_url := entry ->> 'fullUrl';
+    rid := nullif(res ->> 'id', '');
+    existing := null;
+    cond := entry #>> '{request,ifNoneExist}';
+    if method = 'POST' and cond like 'identifier=%' then
+      existing := fhir.find_by_identifier(rt, substr(cond, 12));
+    end if;
+    if existing is not null then
+      rid := existing;
+    elsif rid is null then
+      rid := case when full_url like 'urn:uuid:%' then substr(full_url, 10) else gen_random_uuid()::text end;
+    end if;
+
+    ids := ids || rid; types := types || rt; skip := skip || (existing is not null);
+
+    if full_url is not null then
+      ref_map := ref_map || jsonb_build_object(full_url, rt || '/' || rid);
+    end if;
+    if jsonb_typeof(res -> 'identifier') = 'array' then
+      for ident in select * from jsonb_array_elements(res -> 'identifier') loop
+        if ident ->> 'value' is not null then
+          ref_map := ref_map
+            || jsonb_build_object(rt || '?identifier=' || coalesce(ident ->> 'system', '') || '|' || (ident ->> 'value'), rt || '/' || rid)
+            || jsonb_build_object(rt || '?identifier=' || (ident ->> 'value'), rt || '/' || rid);
+        end if;
+      end loop;
+    end if;
+  end loop;
+
+  -- Pass 2: rewrite references and write.
+  for i in 0 .. n - 1 loop
+    entry := entries -> i;
+    rid := ids[i + 1];
+    rt := types[i + 1];
+    method := upper(coalesce(entry #>> '{request,method}', 'POST'));
+
+    if skip[i + 1] then
+      responses := responses || jsonb_build_object('response', jsonb_strip_nulls(jsonb_build_object(
+        'status', '200 OK',
+        'location', case when rid is null then null else rt || '/' || rid end)));
+      continue;
+    end if;
+
+    tbl := fhir.resource_table(rt);
+
+    if method = 'DELETE' then
+      execute format('delete from fhir.%I where id = $1', tbl) using rid;
+      responses := responses || jsonb_build_object('response', jsonb_build_object('status', '204 No Content'));
+      continue;
+    end if;
+
+    txt := ((entry -> 'resource') || jsonb_build_object('id', rid))::text;
+    for ref in select distinct m[1] from regexp_matches(txt, '"(urn:uuid:[0-9A-Fa-f-]{36})"', 'g') as m loop
+      if ref_map ? ref then
+        txt := replace(txt, '"' || ref || '"', '"' || (ref_map ->> ref) || '"');
+      end if;
+    end loop;
+    for ref in select distinct m[1] from regexp_matches(txt, '"reference":\s*"([A-Z][A-Za-z]+\?identifier=[^"]+)"', 'g') as m loop
+      resolved := coalesce(ref_map ->> replace(ref, '%7C', '|'), fhir.resolve_conditional_reference(ref));
+      if resolved is not null then
+        txt := replace(txt, '"' || ref || '"', '"' || resolved || '"');
+      end if;
+    end loop;
+    res := txt::jsonb;
+
+    execute format(
+      'insert into fhir.%I (resource) values ($1)
+       on conflict (id) do update set resource = excluded.resource
+       returning version_id', tbl)
+      into version using res;
+
+    responses := responses || jsonb_build_object('response', jsonb_build_object(
+      'status', case when version = 1 then '201 Created' else '200 OK' end,
+      'location', rt || '/' || rid || '/_history/' || version,
+      'etag', 'W/"' || version || '"'));
+  end loop;
+
+  return jsonb_build_object(
+    'resourceType', 'Bundle',
+    'type', case when bundle ->> 'type' = 'batch' then 'batch-response' else 'transaction-response' end,
+    'entry', responses
+  );
+end;
+$$;
+
+-- -----------------------------------------------------------------------------
+-- Grants: signed-in users and the service role only.
+-- -----------------------------------------------------------------------------
+revoke execute on function
+  fhir.resource_table(text),
+  fhir.find_by_identifier(text, text),
+  fhir.resolve_conditional_reference(text),
+  fhir.read_resource(text, text),
+  fhir.create_resource(jsonb),
+  fhir.update_resource(jsonb, integer),
+  fhir.delete_resource(text, text),
+  fhir.history(text, text),
+  fhir.patient_everything(text),
+  fhir.import_bundle(jsonb)
+from public, anon;
+
+grant execute on function
+  fhir.resource_table(text),
+  fhir.find_by_identifier(text, text),
+  fhir.resolve_conditional_reference(text),
+  fhir.read_resource(text, text),
+  fhir.create_resource(jsonb),
+  fhir.update_resource(jsonb, integer),
+  fhir.delete_resource(text, text),
+  fhir.history(text, text),
+  fhir.patient_everything(text),
+  fhir.import_bundle(jsonb)
+to authenticated, service_role;
