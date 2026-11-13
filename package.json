@@ -1,0 +1,41 @@
+{
+  "name": "supabase-fhir",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/eudanielvieira/supabase-fhir"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.119.0"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.4",
+    "@types/fhir": "^0.0.44",
+    "supabase": "^3.1.0",
+    "typescript": "^7.0.2"
+  },
+  "description": "FHIR R4 starter for Supabase: Postgres schema, row level security, audit log, version history and TypeScript types, seeded with Synthea synthetic patients.",
+  "keywords": [
+    "fhir",
+    "supabase",
+    "postgres",
+    "healthcare",
+    "hl7",
+    "rls",
+    "synthea",
+    "typescript"
+  ],
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "test:db": "supabase test db",
+    "db:start": "supabase start",
+    "db:stop": "supabase stop",
+    "db:reset": "supabase db reset",
+    "seed:synthea": "bun run scripts/seed-synthea.ts",
+    "seed:build": "bun run scripts/build-seed.ts",
+    "types:gen": "supabase gen types typescript --local --schema fhir"
+  },
+  "type": "module"
+}
