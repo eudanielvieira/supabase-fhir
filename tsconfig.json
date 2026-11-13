@@ -18,5 +18,5 @@
     "noUnusedParameters": true,
     "types": ["bun", "fhir"]
   },
-  "include": ["src", "tests", "scripts"]
+  "include": ["clients/typescript", "scripts"]
 }

@@ -24,3 +24,21 @@ describe('fhirErrorFromPostgrest', () => {
     expect(fhirErrorFromPostgrest({ code: '42501', message: 'x' }).isForbidden).toBe(true);
   });
 });
+
+describe('OperationOutcome in details', () => {
+  const outcome = JSON.stringify({
+    resourceType: 'OperationOutcome',
+    issue: [{ severity: 'error', code: 'not-found', diagnostics: 'Patient/x not found' }],
+  });
+
+  test('is parsed when fhir.fail() attached one', () => {
+    const error = fhirErrorFromPostgrest({ code: 'PT404', message: 'Patient/x not found', details: outcome });
+    expect(error.outcome?.issue[0]?.code).toBe('not-found');
+  });
+
+  test('is undefined for plain text or missing details', () => {
+    expect(fhirErrorFromPostgrest({ code: '23514', message: 'x', details: 'Failing row contains (...)' }).outcome).toBeUndefined();
+    expect(fhirErrorFromPostgrest({ code: '23514', message: 'x', details: null }).outcome).toBeUndefined();
+    expect(fhirErrorFromPostgrest({ code: '23514', message: 'x' }).outcome).toBeUndefined();
+  });
+});

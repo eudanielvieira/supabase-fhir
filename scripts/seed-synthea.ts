@@ -13,7 +13,7 @@ import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { createClient } from '@supabase/supabase-js';
 import type { Bundle } from 'fhir/r4';
-import { createFhirClient, type Database } from '../src';
+import { createFhirClient, type Database } from '../clients/typescript/src';
 
 const { values } = parseArgs({
   args: Bun.argv.slice(2),

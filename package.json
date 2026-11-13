@@ -35,7 +35,11 @@
     "db:reset": "supabase db reset",
     "seed:synthea": "bun run scripts/seed-synthea.ts",
     "seed:build": "bun run scripts/build-seed.ts",
-    "types:gen": "supabase gen types typescript --local --schema fhir"
+    "types:gen": "supabase gen types typescript --local --schema fhir",
+    "sql:build": "bun run scripts/build-sql.ts",
+    "test:http": "bash tests/http/conformance.sh",
+    "example:go": "cd examples/go && go run .",
+    "example:python": "python3 examples/python/example.py"
   },
   "type": "module"
 }

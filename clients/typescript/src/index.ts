@@ -21,7 +21,7 @@ export type {
   SearchColumns,
 } from './infrastructure/supabase/database.types';
 export type { FhirRepository, HistoryEntry, SearchOptions, UpdateOptions } from './application/ports';
-export { FhirError, fhirErrorFromPostgrest } from './domain/errors';
+export { FhirError, fhirErrorFromPostgrest, parseOperationOutcome } from './domain/errors';
 export type { FhirErrorStatus, PostgrestLikeError } from './domain/errors';
 export { compartmentPatientId, parseReference, referenceTo } from './domain/reference';
 export type { ParsedReference } from './domain/reference';
