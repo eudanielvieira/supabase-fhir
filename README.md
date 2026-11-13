@@ -1,6 +1,10 @@
 # supabase-fhir
 
-[Leia em português](README.pt-BR.md)
+<p>
+  <a href="README.md"><img src="https://flagcdn.com/20x15/us.png" width="20" height="15" alt="English"> English</a>
+  &nbsp;|&nbsp;
+  <a href="README.pt-BR.md"><img src="https://flagcdn.com/20x15/br.png" width="20" height="15" alt="Português (Brasil)"> Português (Brasil)</a>
+</p>
 
 FHIR R4 on Supabase, ready to clone. Postgres schema, row level security per patient, audit log,
 version history and a FHIR-flavoured API, seeded with synthetic patients from Synthea.
