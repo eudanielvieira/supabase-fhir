@@ -4,7 +4,7 @@
  * schema can be applied with any migration tool or plain psql (see sql/compat/ for Postgres
  * without Supabase). Run `bun run sql:build` after touching a migration; CI checks the result.
  */
-import { readdir, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 const migrationsDir = 'supabase/migrations';
@@ -23,5 +23,6 @@ ${files.map((f) => `--   ${f}`).join('\n')}
 
 `;
 
+await mkdir('sql/dist', { recursive: true });
 await writeFile(target, banner + parts.map((p) => p.trimEnd() + '\n').join('\n'));
 console.log(`${target}: ${files.length} migrations, ${(Buffer.byteLength(banner) + parts.reduce((n, p) => n + Buffer.byteLength(p), 0)) / 1024 | 0} KB`);

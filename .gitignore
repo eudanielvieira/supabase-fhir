@@ -40,3 +40,7 @@ data/
 !.env.example
 supabase/.temp/
 supabase/.branches/
+
+# the single-file SQL distribution is a committed artifact (bun run sql:build)
+!sql/dist/
+!sql/dist/*
