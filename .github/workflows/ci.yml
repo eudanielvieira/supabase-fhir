@@ -21,7 +21,7 @@ jobs:
         run: bun run sql:build && git diff --exit-code -- sql/dist
 
   examples:
-    name: go and python examples compile
+    name: go, python and php examples compile
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
@@ -31,6 +31,7 @@ jobs:
           cache: false
       - run: cd examples/go && go vet ./... && go build -o /dev/null .
       - run: python3 -m py_compile examples/python/example.py
+      - run: php -l examples/php/example.php
 
   database:
     name: migrations, seeds, pgTAP and HTTP conformance

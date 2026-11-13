@@ -39,7 +39,8 @@
     "sql:build": "bun run scripts/build-sql.ts",
     "test:http": "bash tests/http/conformance.sh",
     "example:go": "cd examples/go && go run .",
-    "example:python": "python3 examples/python/example.py"
+    "example:python": "python3 examples/python/example.py",
+    "example:php": "php examples/php/example.php"
   },
   "type": "module"
 }
