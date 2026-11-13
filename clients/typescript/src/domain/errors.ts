@@ -1,6 +1,6 @@
 import type { OperationOutcome } from 'fhir/r4';
 
-export type FhirErrorStatus = 400 | 403 | 404 | 409 | 500;
+export type FhirErrorStatus = 400 | 401 | 403 | 404 | 409 | 500;
 
 /** Error raised by the FHIR client. status follows HTTP semantics so callers can map it directly. */
 export class FhirError extends Error {
@@ -33,6 +33,11 @@ export class FhirError extends Error {
   get isForbidden(): boolean {
     return this.status === 403;
   }
+
+  /** The JWT is missing, invalid or expired (PostgREST PGRST301/302). */
+  get isUnauthorized(): boolean {
+    return this.status === 401;
+  }
 }
 
 export interface PostgrestLikeError {
@@ -50,6 +55,8 @@ const STATUS_BY_CODE: Record<string, FhirErrorStatus> = {
   '23514': 400,
   '42501': 403,
   PGRST116: 404,
+  PGRST301: 401,
+  PGRST302: 401,
 };
 
 /** fhir.fail() puts an OperationOutcome in the error detail; PostgREST exposes it as `details`. */

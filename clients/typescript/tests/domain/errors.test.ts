@@ -9,6 +9,7 @@ describe('fhirErrorFromPostgrest', () => {
     ['42501', 403],
     ['23514', 400],
     ['PGRST116', 404],
+    ['PGRST301', 401],
     ['XX000', 500],
     [null, 500],
   ])('maps code %s to status %i', (code, status) => {
