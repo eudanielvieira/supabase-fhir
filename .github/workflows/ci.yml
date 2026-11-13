@@ -7,7 +7,7 @@ on:
 
 jobs:
   typescript:
-    name: typecheck and unit tests
+    name: typecheck, unit tests and sql dist
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -17,16 +17,36 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun run typecheck
       - run: bun test
+      - name: sql/dist is up to date
+        run: bun run sql:build && git diff --exit-code -- sql/dist
+
+  examples:
+    name: go and python examples compile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      - run: cd examples/go && go vet ./... && go build -o /dev/null .
+      - run: python3 -m py_compile examples/python/example.py
 
   database:
-    name: migrations, seeds and pgTAP
+    name: migrations, seeds, pgTAP and HTTP conformance
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
       - uses: supabase/setup-cli@v1
         with:
           version: latest
-      - name: start Postgres with migrations and seeds
-        run: supabase db start
-      - name: run pgTAP tests
+      - name: start the local stack (database, auth, PostgREST)
+        run: supabase start -x realtime,storage-api,imgproxy,mailpit,postgres-meta,studio,edge-runtime,logflare,vector,supavisor
+      - name: pgTAP
         run: supabase test db
+      - name: HTTP conformance through PostgREST
+        run: |
+          eval "$(supabase status -o env)"
+          export SUPABASE_URL="${API_URL:-http://127.0.0.1:54321}"
+          export SUPABASE_ANON_KEY="${ANON_KEY:-${PUBLISHABLE_KEY:-}}"
+          export SUPABASE_SERVICE_ROLE_KEY="${SERVICE_ROLE_KEY:-${SECRET_KEY:-}}"
+          bash tests/http/conformance.sh
