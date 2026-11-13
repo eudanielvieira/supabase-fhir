@@ -1,5 +1,7 @@
 # supabase-fhir
 
+[Leia em português](README.pt-BR.md)
+
 FHIR R4 on Supabase, ready to clone. Postgres schema, row level security per patient, audit log,
 version history and a FHIR-flavoured API, seeded with synthetic patients from Synthea.
 Postgres first: the rules live in the database, so any language talks to it over HTTP or SQL.
@@ -31,8 +33,8 @@ what. This repository is that foundation, written once, tested, and free to copy
 
 ## Use cases
 
-What the starter is built to do, in plain words. The full list with priorities lives in
-[dxspec/backlog.md](dxspec/backlog.md).
+What the starter is built to do, in plain words. The full list with priorities, and the decisions behind the design, live in
+[docs/design](docs/design).
 
 - A developer provisions a FHIR-ready database with one `supabase db reset` and adds resource types with one SQL call.
 - A patient signs in and sees their own record and nothing else, enforced by the database.
