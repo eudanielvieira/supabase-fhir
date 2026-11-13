@@ -1,6 +1,6 @@
 -- RPC surface: create / read / update / delete / history and the helper functions (UC-003, UC-015).
 begin;
-select plan(20);
+select plan(22);
 
 select is(fhir.table_name('MedicationRequest'), 'medication_request', 'table_name converts PascalCase to snake_case');
 select is(fhir.table_name('ExplanationOfBenefit'), 'explanation_of_benefit', 'table_name handles three words');
@@ -15,6 +15,20 @@ select is((select fhir.create_resource('{"resourceType":"Patient","name":[{"fami
 select throws_ok($$select fhir.create_resource('{"name":"no type"}'::jsonb)$$, 'PT400', null, 'create_resource needs resourceType');
 select throws_ok($$select fhir.create_resource('{"resourceType":"Specimen"}'::jsonb)$$, 'PT400', null, 'create_resource rejects undefined types');
 select throws_ok($$select fhir.read_resource('Patient', 'does-not-exist')$$, 'PT404', null, 'read_resource answers 404 for unknown ids');
+
+create function pg_temp.error_detail(sql text) returns jsonb language plpgsql as $$
+declare d text;
+begin
+  execute sql;
+  return null;
+exception when others then
+  get stacked diagnostics d = pg_exception_detail;
+  return d::jsonb;
+end $$;
+select is((select pg_temp.error_detail($$select fhir.read_resource('Patient', 'does-not-exist')$$) ->> 'resourceType'), 'OperationOutcome',
+  'errors carry a FHIR OperationOutcome in the detail');
+select is((select pg_temp.error_detail($$select fhir.read_resource('Patient', 'does-not-exist')$$) #>> '{issue,0,code}'), 'not-found',
+  'the OperationOutcome issue code follows the FHIR IssueType value set');
 select throws_ok($$select fhir.update_resource('{"resourceType":"Patient","id":"does-not-exist"}'::jsonb)$$, 'PT404', null, 'update_resource answers 404 for unknown ids');
 select throws_ok($$select fhir.delete_resource('Patient', 'does-not-exist')$$, 'PT404', null, 'delete_resource answers 404 for unknown ids');
 

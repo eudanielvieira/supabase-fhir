@@ -2,8 +2,8 @@
 -- supabase-fhir | 0005 RPC API
 -- FHIR-flavoured operations callable with supabase.schema('fhir').rpc(...).
 -- All of them run as the caller (SECURITY INVOKER) so RLS always applies.
--- Errors use PostgREST status codes: PT400, PT404, PT409 map to HTTP 400/404/409,
--- and 42501 (insufficient privilege) maps to 403.
+-- Errors go through fhir.fail(): PostgREST maps PT400, PT404, PT409 to HTTP 400/404/409
+-- and 42501 to 403, and the response "details" carries a FHIR OperationOutcome.
 -- =============================================================================
 
 -- Table backing a resource type, or null when it was never defined.
@@ -80,13 +80,13 @@ declare
   found_version   integer;
 begin
   if tbl is null then
-    raise exception 'unknown resource type %', resource_type using errcode = 'PT400';
+    perform fhir.fail('PT400', 'not-supported', format('unknown resource type %s', resource_type));
   end if;
   execute format('select resource, patient_id, version_id from fhir.%I where id = $1', tbl)
     into found_resource, found_patient, found_version
     using id;
   if found_resource is null then
-    raise exception '%/% not found', resource_type, id using errcode = 'PT404';
+    perform fhir.fail('PT404', 'not-found', format('%s/%s not found', resource_type, id));
   end if;
   perform fhir.log_access(resource_type, id, found_patient, found_version);
   return found_resource;
@@ -104,11 +104,11 @@ declare
   created jsonb;
 begin
   if rt is null then
-    raise exception 'resource.resourceType is required' using errcode = 'PT400';
+    perform fhir.fail('PT400', 'required', 'resource.resourceType is required');
   end if;
   tbl := fhir.resource_table(rt);
   if tbl is null then
-    raise exception 'unknown resource type %', rt using errcode = 'PT400';
+    perform fhir.fail('PT400', 'not-supported', format('unknown resource type %s', rt));
   end if;
   execute format('insert into fhir.%I (resource) values ($1) returning resource', tbl)
     into created
@@ -132,11 +132,11 @@ declare
   current_version integer;
 begin
   if rt is null or rid is null then
-    raise exception 'resource.resourceType and resource.id are required' using errcode = 'PT400';
+    perform fhir.fail('PT400', 'required', 'resource.resourceType and resource.id are required');
   end if;
   tbl := fhir.resource_table(rt);
   if tbl is null then
-    raise exception 'unknown resource type %', rt using errcode = 'PT400';
+    perform fhir.fail('PT400', 'not-supported', format('unknown resource type %s', rt));
   end if;
 
   if expected_version is null then
@@ -150,12 +150,11 @@ begin
   if updated is null then
     execute format('select version_id from fhir.%I where id = $1', tbl) into current_version using rid;
     if current_version is null then
-      raise exception '%/% not found', rt, rid using errcode = 'PT404';
+      perform fhir.fail('PT404', 'not-found', format('%s/%s not found', rt, rid));
     elsif expected_version is not null and current_version <> expected_version then
-      raise exception 'version conflict on %/%: expected %, current %', rt, rid, expected_version, current_version
-        using errcode = 'PT409';
+      perform fhir.fail('PT409', 'conflict', format('version conflict on %s/%s: expected %s, current %s', rt, rid, expected_version, current_version));
     else
-      raise exception 'no write access to %/%', rt, rid using errcode = '42501';
+      perform fhir.fail('42501', 'forbidden', format('no write access to %s/%s', rt, rid));
     end if;
   end if;
   return updated;
@@ -173,16 +172,16 @@ declare
   visible boolean;
 begin
   if tbl is null then
-    raise exception 'unknown resource type %', resource_type using errcode = 'PT400';
+    perform fhir.fail('PT400', 'not-supported', format('unknown resource type %s', resource_type));
   end if;
   execute format('delete from fhir.%I where id = $1', tbl) using id;
   get diagnostics deleted = row_count;
   if deleted = 0 then
     execute format('select exists (select 1 from fhir.%I where id = $1)', tbl) into visible using id;
     if visible then
-      raise exception 'no write access to %/%', resource_type, id using errcode = '42501';
+      perform fhir.fail('42501', 'forbidden', format('no write access to %s/%s', resource_type, id));
     end if;
-    raise exception '%/% not found', resource_type, id using errcode = 'PT404';
+    perform fhir.fail('PT404', 'not-found', format('%s/%s not found', resource_type, id));
   end if;
 end;
 $$;
@@ -197,7 +196,7 @@ declare
   tbl text := fhir.resource_table(resource_type);
 begin
   if tbl is null then
-    raise exception 'unknown resource type %', resource_type using errcode = 'PT400';
+    perform fhir.fail('PT400', 'not-supported', format('unknown resource type %s', resource_type));
   end if;
   return query execute format($sql$
     select c.version_id, c.resource, c.last_updated, 'current'::text
@@ -224,7 +223,7 @@ declare
 begin
   select p.resource into patient from fhir.patient p where p.id = $1;
   if patient is null then
-    raise exception 'Patient/% not found', patient_id using errcode = 'PT404';
+    perform fhir.fail('PT404', 'not-found', format('Patient/%s not found', patient_id));
   end if;
   perform fhir.log_access('Patient', patient_id, patient_id, (patient #>> '{meta,versionId}')::integer);
 
@@ -286,11 +285,11 @@ declare
   responses jsonb := '[]'::jsonb;
 begin
   if bundle ->> 'resourceType' is distinct from 'Bundle' then
-    raise exception 'expected a Bundle, got %', coalesce(bundle ->> 'resourceType', 'nothing') using errcode = 'PT400';
+    perform fhir.fail('PT400', 'invalid', format('expected a Bundle, got %s', coalesce(bundle ->> 'resourceType', 'nothing')));
   end if;
   entries := coalesce(bundle -> 'entry', '[]'::jsonb);
   if jsonb_typeof(entries) <> 'array' then
-    raise exception 'Bundle.entry must be an array' using errcode = 'PT400';
+    perform fhir.fail('PT400', 'structure', 'Bundle.entry must be an array');
   end if;
   n := jsonb_array_length(entries);
 
@@ -307,7 +306,7 @@ begin
     if method = 'DELETE' then
       url_parts := regexp_match(coalesce(entry #>> '{request,url}', ''), '^([A-Z][A-Za-z]+)/([A-Za-z0-9\-\.]{1,64})$');
       if url_parts is null or fhir.resource_table(url_parts[1]) is null then
-        raise exception 'entry %: DELETE needs request.url like Type/id with a known type', i using errcode = 'PT400';
+        perform fhir.fail('PT400', 'invalid', format('entry %s: DELETE needs request.url like Type/id with a known type', i));
       end if;
       ids := ids || url_parts[2]; types := types || url_parts[1]; skip := skip || false;
       continue;
@@ -315,12 +314,12 @@ begin
 
     res := entry -> 'resource';
     if res is null or jsonb_typeof(res) <> 'object' then
-      raise exception 'entry % has no resource', i using errcode = 'PT400';
+      perform fhir.fail('PT400', 'structure', format('entry %s has no resource', i));
     end if;
     rt := res ->> 'resourceType';
     tbl := fhir.resource_table(rt);
     if tbl is null then
-      raise exception 'unknown resource type % at entry % (define it with fhir.define_resource)', rt, i using errcode = 'PT400';
+      perform fhir.fail('PT400', 'not-supported', format('unknown resource type %s at entry %s (define it with fhir.define_resource)', rt, i));
     end if;
 
     full_url := entry ->> 'fullUrl';

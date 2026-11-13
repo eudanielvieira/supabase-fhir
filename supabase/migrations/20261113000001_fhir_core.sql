@@ -335,3 +335,40 @@ $$;
 
 revoke execute on function fhir.log_access(text, text, text, integer) from public, anon;
 grant execute on function fhir.log_access(text, text, text, integer) to authenticated, service_role;
+
+-- -----------------------------------------------------------------------------
+-- Errors as FHIR OperationOutcome
+-- fhir.fail() raises with a SQLSTATE PostgREST maps to an HTTP status
+-- (PT400 -> 400, PT404 -> 404, PT409 -> 409, 42501 -> 403) and puts an
+-- OperationOutcome in the error detail, which PostgREST returns as "details".
+-- -----------------------------------------------------------------------------
+create or replace function fhir.operation_outcome(issue_code text, diagnostics text, severity text default 'error')
+returns jsonb
+language sql immutable strict parallel safe
+set search_path = ''
+as $$
+  select jsonb_build_object(
+    'resourceType', 'OperationOutcome',
+    'issue', jsonb_build_array(jsonb_build_object(
+      'severity', severity,
+      'code', issue_code,
+      'diagnostics', diagnostics)));
+$$;
+
+create or replace function fhir.fail(sqlstate_code text, issue_code text, diagnostics text)
+returns void
+language plpgsql
+set search_path = ''
+as $$
+begin
+  raise exception using
+    message = diagnostics,
+    errcode = sqlstate_code,
+    detail = fhir.operation_outcome(issue_code, diagnostics)::text;
+end;
+$$;
+
+grant execute on function
+  fhir.operation_outcome(text, text, text),
+  fhir.fail(text, text, text)
+to authenticated, service_role;
