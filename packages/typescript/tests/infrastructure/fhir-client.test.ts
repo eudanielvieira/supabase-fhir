@@ -110,22 +110,31 @@ describe('createFhirClient', () => {
     expect((failure as FhirError).message).toBe('Patient/x not found');
   });
 
-  test('search queries the resource table with compartment, filters and limit', async () => {
+  test('search calls the audited search_resources RPC with compartment, filters and paging', async () => {
     const observation: Observation = { resourceType: 'Observation', id: 'o1', status: 'final', code: {} };
-    const fake = fakeSupabase({ rows: [{ resource: observation }] });
+    const fake = fakeSupabase({ rpc: () => ({ data: [observation], error: null }) });
     const fhir = createFhirClient(fake.client);
 
-    const results = await fhir.search('Observation', { patientId: 'p1', where: { code: '8302-2' }, limit: 5 });
+    const results = await fhir.search('Observation', { patientId: 'p1', where: { code: '8302-2' }, limit: 5, offset: 10, order: 'asc' });
+    await fhir.search('Patient');
 
     expect(results).toEqual([observation]);
-    expect(fake.table()).toBe('observation');
-    expect(fake.queryCalls).toEqual([
-      { method: 'select', args: ['resource'] },
-      { method: 'order', args: ['last_updated', { ascending: false }] },
-      { method: 'eq', args: ['patient_id', 'p1'] },
-      { method: 'match', args: [{ code: '8302-2' }] },
-      { method: 'limit', args: [5] },
+    expect(fake.rpcCalls).toEqual([
+      {
+        name: 'search_resources',
+        args: { resource_type: 'Observation', patient_id: 'p1', filters: { code: '8302-2' }, max_results: 5, skip: 10, newest_first: false },
+      },
+      { name: 'search_resources', args: { resource_type: 'Patient' } },
     ]);
+  });
+
+  test('logAccess records a read through the RPC', async () => {
+    const fake = fakeSupabase();
+    const fhir = createFhirClient(fake.client);
+
+    await fhir.logAccess('Observation', 'o1');
+
+    expect(fake.rpcCalls).toEqual([{ name: 'log_access', args: { resource_type: 'Observation', resource_id: 'o1' } }]);
   });
 
   test('from exposes the table builder for a resource type', () => {

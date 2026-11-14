@@ -99,7 +99,7 @@ export type ResourceTables = {
 };
 
 export type AccessLevel = 'read' | 'write';
-export type AuditAction = 'create' | 'read' | 'update' | 'delete';
+export type AuditAction = 'create' | 'read' | 'update' | 'delete' | 'search' | 'grant' | 'grant_change' | 'revoke';
 
 export interface PatientAccessRow {
   id: number;
@@ -128,7 +128,7 @@ export interface AuditLogRow {
   occurred_at: string;
   action: AuditAction;
   resource_type: string;
-  resource_id: string;
+  resource_id: string | null;
   patient_id: string | null;
   version_id: number | null;
   actor_id: string | null;
@@ -171,6 +171,18 @@ export interface FhirFunctions {
   history: { Args: { resource_type: string; id: string }; Returns: HistoryRow[] };
   patient_everything: { Args: { patient_id: string }; Returns: Json };
   import_bundle: { Args: { bundle: Json }; Returns: Json };
+  search_resources: {
+    Args: {
+      resource_type: string;
+      patient_id?: string | null;
+      filters?: Json;
+      max_results?: number;
+      skip?: number;
+      newest_first?: boolean;
+    };
+    Returns: Json[];
+  };
+  log_access: { Args: { resource_type: string; resource_id: string }; Returns: undefined };
   has_patient_access: { Args: { patient_id: string; level?: string }; Returns: boolean };
   is_admin: { Args: Record<string, never>; Returns: boolean };
   define_resource: { Args: { p_resource_type: string; p_compartment?: boolean }; Returns: string };

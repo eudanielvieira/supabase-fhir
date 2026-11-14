@@ -18,13 +18,17 @@ export type ResourceQuery<T extends ResourceType> = ReturnType<typeof fromTyped<
 export interface FhirClient extends FhirRepository {
   /** Raw typed access to the fhir schema for anything the helpers do not cover. */
   readonly schema: FhirSchemaClient;
-  /** Typed query builder for a resource table: from('Observation').select('resource').eq('code', '8302-2'). */
+  /** Typed query builder for a resource table: from('Observation').select('resource').eq('code', '8302-2').
+   *  Rows read this way are not audited; call logAccess() for the ones you show. */
   from<T extends ResourceType>(type: T): ResourceQuery<T>;
+  /** Records a read of a resource you fetched through from(). The database checks the access again. */
+  logAccess(type: ResourceType, id: string): Promise<void>;
 }
 
 /**
  * Wraps a supabase-js client with FHIR operations. Every call goes through PostgREST
- * as the signed-in user, so row level security and the audit log always apply.
+ * as the signed-in user, so row level security always applies. read(), everything() and
+ * search() are audited by the database; from() is raw table access and is not.
  *
  *   const supabase = createClient<Database>(url, anonKey);
  *   const fhir = createFhirClient(supabase);
@@ -81,15 +85,18 @@ export function createFhirClient<DB extends FhirDatabase>(supabase: SupabaseClie
     },
 
     async search<T extends ResourceType>(type: T, options: SearchOptions = {}): Promise<ResourceOf<T>[]> {
-      let query = fromTyped(schema, type)
-        .select('resource')
-        .order('last_updated', { ascending: options.order === 'asc' });
-      if (options.patientId) query = query.eq('patient_id', options.patientId);
-      if (options.where) query = query.match(options.where as Record<string, never>);
-      if (options.limit) query = query.limit(options.limit);
-      const { data, error } = await query;
-      if (error) throw fhirErrorFromPostgrest(error);
-      return (data as { resource: unknown }[]).map((row) => row.resource as ResourceOf<T>);
+      const args: FhirFunctions['search_resources']['Args'] = { resource_type: type };
+      if (options.patientId) args.patient_id = options.patientId;
+      if (options.where) args.filters = options.where as Json;
+      if (options.limit !== undefined) args.max_results = options.limit;
+      if (options.offset !== undefined) args.skip = options.offset;
+      if (options.order) args.newest_first = options.order !== 'asc';
+      const rows = await call('search_resources', args);
+      return rows as unknown as ResourceOf<T>[];
+    },
+
+    async logAccess(type: ResourceType, id: string): Promise<void> {
+      await call('log_access', { resource_type: type, resource_id: id });
     },
 
     async everything(patientId: string): Promise<r4.Bundle> {

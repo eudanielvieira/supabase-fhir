@@ -13,12 +13,15 @@ export interface UpdateOptions {
   expectedVersion?: number;
 }
 
+/** Options for search(). Every search is audited as one event with its filters and result count. */
 export interface SearchOptions {
   /** Restrict to one Patient compartment. */
   patientId?: string;
-  /** Equality filters on table columns (generated search columns included). */
+  /** Equality filters on the table's scalar columns (generated search columns included). */
   where?: Record<string, string | number | boolean | null>;
+  /** 1 to 1000, default 100. */
   limit?: number;
+  offset?: number;
   /** Order by last_updated. Defaults to 'desc'. */
   order?: 'asc' | 'desc';
 }
