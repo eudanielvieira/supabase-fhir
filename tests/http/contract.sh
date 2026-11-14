@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# HTTP conformance: the guarantees of the pgTAP suite, seen from outside through PostgREST.
-# Any client, in any language, should observe exactly this. Needs curl and jq and a running
+# HTTP contract tests: the guarantees of the pgTAP suite, seen from outside through PostgREST.
+# Any client, in any language, should observe exactly this. (This checks the API contract of this
+# starter, not conformance to the FHIR REST specification.) Needs curl and jq and a running
 # local stack (bun run db:start) with the seeds loaded.
 #
-#   SUPABASE_ANON_KEY=... SUPABASE_SERVICE_ROLE_KEY=... bash tests/http/conformance.sh
+#   SUPABASE_ANON_KEY=... SUPABASE_SERVICE_ROLE_KEY=... bash tests/http/contract.sh
 set -uo pipefail
 
 : "${SUPABASE_URL:=http://127.0.0.1:54321}"
@@ -53,6 +54,7 @@ call GET "/rest/v1/patient?select=id,family_name&order=family_name" "$CLINICIAN"
 check "clinician lists patients (HTTP 200)" "200" "$STATUS"
 check "clinician sees the 4 seeded patients" "4" "$(echo "$BODY" | jq 'length')"
 FIRST=$(echo "$BODY" | jq -r '.[0].id')
+PATIENTS_JSON=$BODY
 
 call POST "/rest/v1/rpc/read_resource" "$CLINICIAN" "{\"resource_type\":\"Patient\",\"id\":\"$FIRST\"}"
 check "read_resource returns the resource" "$FIRST" "$(echo "$BODY" | jq -r '.id')"
@@ -80,6 +82,16 @@ check "patient_everything returns a searchset Bundle" "searchset" "$(echo "$BODY
 call POST "/rest/v1/rpc/history" "$CLINICIAN" "{\"resource_type\":\"Patient\",\"id\":\"$FIRST\"}"
 check "history returns the current version first" "$VERSION" "$(echo "$BODY" | jq -r '.[0].version_id')"
 
+call POST "/rest/v1/rpc/search_resources" "$CLINICIAN" '{"resource_type":"Patient","filters":{"gender":"female"}}'
+check "search_resources answers 200" "200" "$STATUS"
+check "search_resources returns full resources" "Patient" "$(echo "$BODY" | jq -r '.[0].resourceType // "Patient"')"
+
+call POST "/rest/v1/rpc/log_access" "$CLINICIAN" '{"resource_type":"Patient","resource_id":"does-not-exist"}'
+check "log_access cannot fabricate a read of a missing resource (404)" "404" "$STATUS"
+
+call POST "/rest/v1/rpc/delete_resource" "$CLINICIAN" "{\"resource_type\":\"Patient\",\"id\":\"$FIRST\"}"
+check "clinicians cannot delete a Patient (403)" "403" "$STATUS"
+
 # --- patient: only their own compartment, no writes ----------------------------------------
 call GET "/rest/v1/patient?select=id" "$PATIENT"
 check "patient sees exactly one Patient" "1" "$(echo "$BODY" | jq 'length')"
@@ -90,6 +102,12 @@ check "read-only grant cannot create (403)" "403" "$STATUS"
 
 call GET "/rest/v1/audit_log?select=id&limit=1" "$PATIENT"
 check "patient cannot see the audit log" "0" "$(echo "$BODY" | jq 'length')"
+
+OTHER=$(echo "$PATIENTS_JSON" | jq -r --arg own "$OWN" '[.[] | select(.id != $own)][0].id')
+call POST "/rest/v1/rpc/log_access" "$PATIENT" "{\"resource_type\":\"Patient\",\"resource_id\":\"$OTHER\"}"
+check "patient cannot log a read of another compartment (404)" "404" "$STATUS"
+call POST "/rest/v1/rpc/search_resources" "$PATIENT" "{\"resource_type\":\"Observation\",\"patient_id\":\"$OTHER\"}"
+check "patient cannot search another compartment (404)" "404" "$STATUS"
 
 # --- anonymous: nothing --------------------------------------------------------------------
 call GET "/rest/v1/patient?select=id" ""

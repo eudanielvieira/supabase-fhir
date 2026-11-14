@@ -47,7 +47,7 @@ jobs:
         run: dotnet build examples/csharp -c Release --nologo -v q
 
   database:
-    name: migrations, seeds, pgTAP and HTTP conformance
+    name: migrations, seeds, pgTAP, HTTP contract and examples
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
@@ -58,10 +58,24 @@ jobs:
         run: supabase start -x realtime,storage-api,imgproxy,mailpit,postgres-meta,studio,edge-runtime,logflare,vector,supavisor
       - name: pgTAP
         run: supabase test db
-      - name: HTTP conformance through PostgREST
+      - name: HTTP contract through PostgREST
         run: |
           eval "$(supabase status -o env)"
           export SUPABASE_URL="${API_URL:-http://127.0.0.1:54321}"
           export SUPABASE_ANON_KEY="${ANON_KEY:-${PUBLISHABLE_KEY:-}}"
           export SUPABASE_SERVICE_ROLE_KEY="${SERVICE_ROLE_KEY:-${SECRET_KEY:-}}"
-          bash tests/http/conformance.sh
+          bash tests/http/contract.sh
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install --frozen-lockfile
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.22'
+          cache: false
+      - name: every example against the stack
+        run: |
+          eval "$(supabase status -o env)"
+          export SUPABASE_URL="${API_URL:-http://127.0.0.1:54321}"
+          export SUPABASE_ANON_KEY="${ANON_KEY:-${PUBLISHABLE_KEY:-}}"
+          bash tests/http/examples.sh

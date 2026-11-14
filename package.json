@@ -37,7 +37,7 @@
     "seed:build": "bun run scripts/build-seed.ts",
     "types:gen": "supabase gen types typescript --local --schema fhir",
     "sql:build": "bun run scripts/build-sql.ts",
-    "test:http": "bash tests/http/conformance.sh",
+    "test:http": "bash tests/http/contract.sh",
     "example:go": "cd examples/go && go run .",
     "example:python": "python3 examples/python/example.py",
     "example:php": "php examples/php/example.php",
@@ -45,7 +45,8 @@
     "example:elysia": "bun run examples/elysia/src/index.ts",
     "example:java": "mvn -q -f examples/java/pom.xml compile exec:java",
     "example:csharp": "dotnet run --project examples/csharp",
-    "example:ruby": "ruby examples/ruby/example.rb"
+    "example:ruby": "ruby examples/ruby/example.rb",
+    "test:examples": "bash tests/http/examples.sh"
   },
   "type": "module",
   "workspaces": [
