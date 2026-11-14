@@ -53,8 +53,8 @@ serve() { # name port command...
   rm -f "$log" "$body"
 }
 
-serve nestjs 3301 bun run examples/nestjs/src/main.ts
-serve elysia 3302 bun run examples/elysia/src/index.ts
+serve nestjs 3301 bash -c 'cd examples/nestjs && bun run src/main.ts'
+serve elysia 3302 bash -c 'cd examples/elysia && bun run src/index.ts'
 
 echo
 echo "$pass passed, $fail failed"
