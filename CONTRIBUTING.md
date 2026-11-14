@@ -10,7 +10,8 @@ bun run typecheck      # TypeScript
 bun test               # unit tests
 bun run db:start       # local Supabase with migrations and seeds (needs Docker)
 bun run test:db        # pgTAP tests against the local database
-bun run test:http      # HTTP conformance through PostgREST
+bun run test:http      # HTTP contract through PostgREST
+bun run test:examples  # every example against the stack (needs the toolchains)
 bun run sql:build      # regenerate sql/dist after touching a migration
 ```
 
@@ -26,7 +27,7 @@ and typechecks `examples/nestjs` and `examples/elysia`.
   `TABLE_NAMES` plus `ResourceMap` in `packages/typescript/src/domain/resource-types.ts`, and the
   table list in `docs/api.md`.
 - **The HTTP contract is shared by every client.** A change to an RPC or an error code updates
-  `docs/api.md`, `tests/http/conformance.sh`, the TypeScript client and the pgTAP tests together.
+  `docs/api.md`, `tests/http/contract.sh`, the TypeScript client and the pgTAP tests together.
 - **Migrations are append only once they ship in a tagged release.** Add a new
   `supabase/migrations/<timestamp>_<name>.sql` instead of editing one that was released, and run
   `bun run sql:build` so `sql/dist/` matches.

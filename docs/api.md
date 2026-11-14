@@ -45,6 +45,8 @@ Scalars come back as a bare JSON value; set-returning functions come back as a J
 | Function | Body | Returns |
 |---|---|---|
 | `read_resource` | `{"resource_type":"Patient","id":"..."}` | the resource. Logs a read in `fhir.audit_log` |
+| `search_resources` | `{"resource_type":"Observation","patient_id":"...","filters":{"code":"8302-2"},"max_results":50,"skip":0,"newest_first":true}` (all but `resource_type` optional) | an array of resources matching the filters (equality on the table's scalar columns). Logs one search event with the filters and the result count |
+| `log_access` | `{"resource_type":"Patient","resource_id":"..."}` | empty body. Records a read you made through the table API; the database checks you may see the row first, so entries cannot be fabricated |
 | `create_resource` | `{"resource":{...}}` | the stored resource with `id` and `meta` |
 | `update_resource` | `{"resource":{...},"expected_version":3}` (`expected_version` optional) | the stored resource |
 | `delete_resource` | `{"resource_type":"Observation","id":"..."}` | empty body |
@@ -94,7 +96,10 @@ get 'patient?resource=cs.{"identifier":[{"system":"http://hl7.org/fhir/sid/us-ss
 
 Writing straight to a table also works (`POST /rest/v1/observation` with `{"resource":{...}}`
 and `Prefer: return=representation`); the triggers fill `id` and `meta`. Reads through tables
-are not written to the audit log; reads through `read_resource` and `patient_everything` are.
+are not written to the audit log; reads through `read_resource`, `patient_everything` and
+`search_resources` are, and `log_access` records a table read after the fact. Prefer
+`search_resources` when the access must be traceable; prefer the table API for ad hoc filters
+(`gte`, `lte`, `in`, JSONB containment) that the RPC does not expose.
 
 Table names: `patient`, `practitioner`, `practitioner_role`, `organization`, `location`,
 `medication`, `encounter`, `condition`, `observation`, `procedure`, `medication_request`,

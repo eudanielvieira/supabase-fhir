@@ -37,22 +37,30 @@ which tables.
 `fhir.patient_access` (read or write, optionally time-boxed). Admins are identified by
 `app_metadata.fhir_role = 'admin'` in the JWT, which users cannot edit. Reference data is readable
 by any signed-in user and writable by admins. Anonymous has no access to the schema at all.
+Deleting a Patient is admin only: it cascades to the grants and would orphan the whole
+compartment, so a write grant must not be enough.
 
 **Consequences.** One policy template covers every resource type. Rows without a patient are
 admin-only by default (fail closed). Multi-tenancy by organization is a later layer, not a
 replacement.
 
-## ADR-004 Audit by triggers for writes, by RPC for reads, identifiers only
+## ADR-004 Audit by triggers for writes and grants, by RPC for reads and searches, identifiers only
 
-**Context.** Postgres has no select triggers, and audit rows must never become a second copy of PHI.
+**Context.** Postgres has no select triggers, audit rows must never become a second copy of PHI,
+and anything that can write the log must not be usable to forge it.
 
-**Decision.** `fhir_audit_write` records create, update and delete on every resource table.
-Reads are recorded when they go through `fhir.read_resource()` and `fhir.patient_everything()`,
-which the clients use. The log stores identifiers, actor, role and request metadata, never the
-resource payload. Only admins read the log.
+**Decision.** `fhir_audit_write` records create, update and delete on every resource table;
+`fhir_audit_access_change` records every grant, change and revoke in `patient_access`. Reads are
+recorded when they go through `read_resource()`, `patient_everything()` or `search_resources()`
+(one event per search, with filters and result count), which the clients use. The log writers
+(`log_access`, `log_search`) are SECURITY DEFINER but revalidate access themselves: they look the
+row up and apply the same rules as the policies before inserting, answering 404 otherwise. The log
+stores identifiers, actor, role and request metadata, never the payload. Only admins read it.
 
-**Consequences.** Writes cannot bypass the log. Plain table reads are not row-audited; projects
-that need that route reads through the RPCs or rely on API logs. Documented as a known limit.
+**Consequences.** Writes and grant changes cannot bypass the log; read entries cannot be
+fabricated for data the caller cannot see. Plain table reads are not audited unless the client
+calls `log_access` afterwards; documented as a known limit, with `search_resources` as the
+audited alternative. Rate limiting of log writes is left to the API gateway, as it is for reads.
 
 ## ADR-005 History as superseded versions in one table
 
@@ -99,11 +107,12 @@ and administrative jobs only.
 **Consequences.** One set of rules, enforced in one place. Backends stay thin and cannot leak
 more than the user could fetch directly.
 
-## ADR-010 Tests are the contract, at two levels
+## ADR-010 Tests are the contract, at three levels
 
-**Decision.** pgTAP tests define the behaviour at the database (RLS, triggers, import, API) and a
-curl-based conformance suite checks the same guarantees through PostgREST. CI runs both on every
-push, plus typecheck, unit tests and compilation of every example.
+**Decision.** pgTAP tests define the behaviour at the database (RLS, triggers, import, API), a
+curl-based contract suite checks the same guarantees through PostgREST (the contract of this
+starter, not FHIR REST conformance), and every example in `examples/` is run against the live
+stack. CI runs all of it on every push, plus typecheck and unit tests.
 
 **Consequences.** A change that weakens a policy fails CI before review. Contributors add a test
 with every behaviour change; see CONTRIBUTING.md.

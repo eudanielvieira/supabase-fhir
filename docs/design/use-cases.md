@@ -15,7 +15,7 @@ healthcare startup does not rebuild the foundation. Synthetic data only (Synthea
 - **MVP**: `supabase start` loads Synthea data; a client reads through RLS with auditing on; tests pass in CI.
   UC-001 to UC-024.
 - **v0.1, any language**: the database plus HTTP is the product; clients are adapters.
-  UC-034 to UC-040.
+  UC-034 to UC-045.
 - **v1 and later**: UC-025 to UC-033.
 
 ## Map
@@ -59,9 +59,14 @@ healthcare startup does not rebuild the foundation. Synthetic data only (Synthea
 | UC-035 | Client examples in Go, Python, PHP, Java, C# and Ruby | Developer | SDK | Should | v0.1 | done |
 | UC-036 | API errors as FHIR OperationOutcome | Developer | API | Should | v0.1 | done |
 | UC-037 | Run on plain Postgres (compatibility layer) | Developer | Operations | Should | v0.1 | done |
-| UC-038 | HTTP conformance suite in CI | Developer / CI | Quality | Should | v0.1 | done |
+| UC-038 | HTTP contract suite in CI | Developer / CI | Quality | Should | v0.1 | done |
 | UC-039 | Single-file SQL distribution | Developer | Operations | Should | v0.1 | done |
 | UC-040 | Example backends (NestJS, Elysia) forwarding the user JWT | Developer | SDK | Should | v0.1 | done |
+| UC-041 | Audited search through `search_resources` | Compliance | Audit | Must | v0.1 | done |
+| UC-042 | Audit trail of access grant changes | Compliance | Audit | Must | v0.1 | done |
+| UC-043 | Log writers that cannot be used to forge entries | Compliance | Audit | Must | v0.1 | done |
+| UC-044 | Patient deletion restricted to admins | Admin | Access (RLS) | Must | v0.1 | done |
+| UC-045 | Every example run against the stack in CI | Developer / CI | Quality | Should | v0.1 | done |
 
 ## Details
 
@@ -95,10 +100,14 @@ One line each: who, what they want, why it matters.
 - **UC-035** Developer wants the full flow in their language on one screen; one file per language under `examples/`, standard library (Java adds Jackson), compiled or linted in CI.
 - **UC-036** Developer wants to handle errors with the FHIR library they already use; `fhir.fail()` raises with an HTTP-mapped SQLSTATE and an OperationOutcome in `details`.
 - **UC-037** Developer wants the schema outside Supabase; `sql/compat/plain-postgres.sql` creates the roles and `auth` helpers, PostgREST or per-transaction claims do the rest.
-- **UC-038** CI must prove every client sees the same behaviour; `tests/http/conformance.sh` (curl and jq) exercises RLS, errors, import and OpenAPI through PostgREST.
+- **UC-038** CI must prove every client sees the same behaviour; `tests/http/contract.sh` (curl and jq) exercises RLS, errors, import and OpenAPI through PostgREST.
 - **UC-039** Developer wants to apply the schema with any migration tool; `bun run sql:build` concatenates the migrations into `sql/dist/`, CI fails when stale.
 - **UC-040** Developer wants their own API in front of the database without reimplementing access; `examples/nestjs` and `examples/elysia` build the client per request from the user's `Authorization` header.
-
+- **UC-041** Compliance wants searches to be traceable; `fhir.search_resources()` filters on the search columns and logs one event with the filters and result count, and the TypeScript client's `search()` uses it.
+- **UC-042** Compliance wants to know who had access to whom and when; a trigger on `patient_access` records grant, change and revoke with the before and after rows.
+- **UC-043** Compliance wants a log that cannot be forged; `log_access` and `log_search` look the data up and apply the access rules themselves before writing, answering 404 otherwise.
+- **UC-044** Admin wants to be the only one who can remove a patient record; the Patient delete policy is admin only, since a delete cascades to the grants and orphans the compartment.
+- **UC-045** Developer wants proof the examples work, not only compile; `tests/http/examples.sh` runs each one against the stack in CI and checks the demo flow completes.
 ## Out of scope for now
 
 - UC-031 profile validation needs a validation engine.

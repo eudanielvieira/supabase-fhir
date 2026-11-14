@@ -15,8 +15,8 @@ ele por HTTP ou SQL.
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 Todo produto de saúde no Supabase começa reconstruindo a mesma base: como guardar recursos FHIR
-no Postgres, como garantir que um paciente veja só os próprios dados, como provar quem leu o quê.
-Este repositório é essa base, escrita uma vez, testada e livre para copiar.
+no Postgres, como garantir que um paciente veja só os próprios dados, como provar quem alterou o quê
+e quem leu. Este repositório é essa base, escrita uma vez, testada e livre para copiar.
 
 > Somente dados sintéticos. Todo paciente deste repositório foi gerado pelo
 > [Synthea](https://synthea.mitre.org). Não existe dado real de paciente aqui, e nunca vai existir.
@@ -27,14 +27,14 @@ Este repositório é essa base, escrita uma vez, testada e livre para copiar.
 |---|---|---|
 | Schema | `supabase/migrations/` | Uma tabela por tipo de recurso (`fhir.patient`, `fhir.observation`, ...): o recurso completo em JSONB mais colunas de busca indexadas |
 | Controle de acesso | `fhir.patient_access` e políticas de RLS | Um usuário vê apenas os compartimentos de paciente que recebeu. Admins veem tudo. Anônimo não vê nada |
-| Log de auditoria | `fhir.audit_log` | Toda criação, atualização, exclusão e leitura auditada: quem, quando, qual recurso, qual paciente, de onde |
+| Log de auditoria | `fhir.audit_log` | Toda criação, atualização, exclusão e mudança de concessão de acesso, mais toda leitura e busca feita pelas operações FHIR: quem, quando, qual recurso, qual paciente, de onde |
 | Histórico | `fhir.resource_history` | Toda versão anterior de todo recurso, no estilo `_history` do FHIR |
-| Operações FHIR | funções RPC `fhir.*` | read, create, update com lock otimista, delete, history, `$everything` do Patient, importação de Bundle. Erros são `OperationOutcome` FHIR |
+| Operações FHIR | funções RPC `fhir.*` | read, search, create, update com lock otimista, delete, history, `$everything` do Patient, importação de Bundle. Erros são `OperationOutcome` FHIR |
 | Contrato HTTP | [`docs/api.md`](docs/api.md) | Cada chamada em `curl`, mais o documento OpenAPI que o PostgREST serve. Funciona em qualquer linguagem |
 | Clientes | `packages/typescript/`, `examples/` | Um cliente TypeScript tipado, backends NestJS e Elysia que repassam o JWT do usuário, e exemplos sem dependências em Go, Python, PHP, Java, C# e Ruby |
 | Postgres puro | `sql/compat/`, `sql/dist/` | Rode sem Supabase: uma camada de compatibilidade e o schema em um arquivo só |
 | Dados sintéticos | `supabase/seeds/` | 4 pacientes Synthea com mais de 500 recursos, os prestadores que eles referenciam e 3 logins de demonstração |
-| Testes | `supabase/tests/`, `tests/http/`, `packages/typescript/tests/` | 111 asserções pgTAP, uma suíte de conformidade HTTP via PostgREST e testes unitários do cliente |
+| Testes | `supabase/tests/`, `tests/http/`, `packages/typescript/tests/` | 129 asserções pgTAP, uma suíte de contrato HTTP via PostgREST, todos os exemplos executados contra a stack e testes unitários do cliente |
 
 ## Casos de uso
 
@@ -44,7 +44,7 @@ decisões por trás do desenho estão em [docs/design](docs/design) (em inglês)
 - Um dev provisiona um banco pronto para FHIR com um `supabase db reset` e adiciona tipos de recurso com uma chamada SQL.
 - Um paciente entra e vê o próprio prontuário e nada mais, com a garantia vindo do banco.
 - Um profissional lê e escreve nos pacientes que lhe foram concedidos, enquanto a concessão vale.
-- Um admin concede e revoga acesso, lê o log de auditoria e mantém os dados de referência.
+- Um admin concede e revoga acesso (cada mudança auditada), lê o log de auditoria, mantém os dados de referência e é o único que pode excluir um Patient.
 - Um revisor de compliance responde "quem mexeu neste paciente e quando" com `fhir.audit_log` e `fhir.history()`.
 - Um backend importa Bundles FHIR do Synthea ou de um prontuário eletrônico, com referências resolvidas e importação idempotente.
 - Qualquer app, em qualquer linguagem, usa o mesmo contrato HTTP: TypeScript, Go, Python, PHP, Java, C#, Ruby, ou um cliente gerado a partir do OpenAPI.
@@ -173,7 +173,7 @@ O acesso é decidido no banco, por compartimento de paciente. Quatro tipos de ch
 
 | Chamador | Identificado por | Recursos ligados a paciente | Dados de referência (Practitioner, Organization, ...) | Log de auditoria |
 |---|---|---|---|---|
-| Paciente ou profissional | linhas em `fhir.patient_access` | lê ou escreve nos compartimentos concedidos enquanto a concessão vale | lê | não |
+| Paciente ou profissional | linhas em `fhir.patient_access` | lê ou escreve nos compartimentos concedidos enquanto a concessão vale; excluir um Patient é só para admin | lê | não |
 | Admin | JWT com `app_metadata.fhir_role = 'admin'` | tudo | lê e escreve | lê |
 | Service role | service role key, só no servidor | ignora a RLS | ignora a RLS | ignora a RLS |
 | Anônimo | sem sessão | nada, nem o schema | nada | nada |
@@ -205,7 +205,7 @@ Linhas sem paciente (uma Observation sem `subject`, por exemplo) ficam visíveis
 
 ## Log de auditoria e histórico
 
-As escritas são auditadas por triggers, então não há como passar por fora:
+As escritas e as mudanças de concessão são auditadas por triggers, então não há como passar por fora:
 
 ```sql
 select occurred_at, action, resource_type, resource_id, actor_id, actor_role, request
@@ -214,10 +214,13 @@ where patient_id = '<patient id>'
 order by occurred_at desc;
 ```
 
-As leituras são auditadas quando passam por `fhir.read_resource()` ou `fhir.patient_everything()`,
-que é o que os clientes usam. Um `select` puro via PostgREST não é auditado por linha, porque o
-Postgres não tem trigger de select. Para esses casos, use os logs da API do Supabase ou direcione
-as leituras pelas RPCs. O log guarda apenas identificadores, nunca o conteúdo do recurso.
+As leituras são auditadas quando passam por `fhir.read_resource()`, `fhir.patient_everything()` ou
+`fhir.search_resources()`, que é o que os clientes usam (`read`, `everything`, `search`). Uma busca vira
+um único evento com os filtros e a quantidade de resultados. Um `select` direto na tabela via PostgREST
+não é auditado, porque o Postgres não tem trigger de select; registre esses casos com
+`fhir.log_access(tipo, id)`, que busca a linha e confere o acesso de novo antes de gravar, então ninguém
+consegue fabricar registros de dados que não pode ver. O log guarda apenas identificadores, nunca o
+conteúdo do recurso.
 
 O histórico guarda toda versão substituída, inclusive a última antes de uma exclusão:
 
@@ -235,6 +238,8 @@ traz o contrato completo com exemplos em `curl`; a versão curta:
 | Função | Faz |
 |---|---|
 | `read_resource(resource_type, id)` | devolve o recurso e registra uma leitura |
+| `search_resources(resource_type, patient_id, filters, max_results, skip, newest_first)` | filtra pelas colunas de busca e registra um evento de busca |
+| `log_access(resource_type, resource_id)` | registra uma leitura feita pela API de tabelas, depois de conferir que você pode ver a linha |
 | `create_resource(resource)` | insere e devolve o recurso gravado com `id` e `meta` |
 | `update_resource(resource, expected_version)` | substituição completa; `expected_version` dá lock otimista (If-Match) |
 | `delete_resource(resource_type, id)` | exclui; a última versão fica no histórico |
@@ -250,7 +255,7 @@ e "sem permissão" respondem 404 igualmente, para que ids não possam ser enumer
 
 | Linguagem | Onde | Observações |
 |---|---|---|
-| TypeScript | `packages/typescript/` | Tipo `Database` para o supabase-js com `resource` tipado por tabela via `@types/fhir`, e `createFhirClient()` com `read`, `create`, `update`, `remove`, `history`, `search`, `everything`, `importBundle`. Erros são `FhirError` com `status` e `outcome` |
+| TypeScript | `packages/typescript/` | Tipo `Database` para o supabase-js com `resource` tipado por tabela via `@types/fhir`, e `createFhirClient()` com `read`, `search`, `create`, `update`, `remove`, `history`, `everything`, `importBundle`, `logAccess`. Erros são `FhirError` com `status` e `outcome` |
 | NestJS | `examples/nestjs/` | `FhirService` com escopo de requisição montado a partir do header `Authorization`, filtro de exceção que mapeia `FhirError` para status mais OperationOutcome, um controller `patients` |
 | Elysia (Bun) | `examples/elysia/` | o mesmo padrão em 70 linhas: `derive` monta o cliente por requisição, `onError` mapeia os erros |
 | Go | `examples/go/` | biblioteca padrão. Login, listagem, leitura auditada, busca, tratamento de erro |
@@ -287,13 +292,16 @@ SUPABASE_URL=http://127.0.0.1:54321 SUPABASE_SERVICE_ROLE_KEY=... \
 ```bash
 bun test            # domínio e cliente, sem banco
 bun run test:db     # pgTAP contra o banco local: RLS, triggers, importação, API
-bun run test:http   # as mesmas garantias vistas de fora, via PostgREST (precisa da stack no ar)
+bun run test:http       # as mesmas garantias vistas de fora, via PostgREST (precisa da stack no ar)
+bun run test:examples   # todos os exemplos de examples/ contra a stack (precisa das toolchains)
 ```
 
 A suíte pgTAP é o contrato: um paciente não lê outro compartimento, concessões só de leitura não
 escrevem, concessões expiradas param de funcionar, anônimo não recebe nada, `user_metadata` não
-forja um admin, toda escrita é versionada e auditada. A suíte HTTP confere que qualquer cliente vê
-exatamente isso. O CI roda tudo a cada push e compila ou valida cada exemplo.
+forja um admin, toda escrita é versionada e auditada, registros de auditoria não podem ser fabricados,
+um profissional não consegue excluir um Patient. A suíte HTTP confere que qualquer cliente vê exatamente
+isso (ela testa o contrato deste starter, e não a conformidade com a especificação FHIR REST). O CI roda
+tudo a cada push e executa cada exemplo contra a stack.
 
 ## Usando no seu projeto
 
@@ -324,9 +332,22 @@ alter table fhir.specimen
   add column status text generated always as (resource ->> 'status') stored;
 ```
 
+## Comparação
+
+Isto é armazenamento no formato FHIR com regras de acesso e trilha de auditoria dentro do banco que
+você já opera. Não é um servidor FHIR.
+
+| | supabase-fhir | Medplum | HAPI FHIR |
+|---|---|---|---|
+| O que é | schema, RLS, auditoria e operações FHIR dentro do Supabase ou do Postgres | um servidor e plataforma FHIR completos (API REST, auth, subscriptions, UI) sobre Postgres | o servidor FHIR de referência, em Java |
+| Escolha quando | você já está no Supabase e quer dados FHIR ao lado do resto do app, sem mais um servidor para operar | quer uma plataforma FHIR completa e vai operá-la ou pagar por ela | precisa de cobertura máxima da especificação numa stack JVM |
+| API REST FHIR (`GET /Patient/{id}`, parâmetros de busca) | não, RPCs e tabelas; uma fachada REST está no roadmap | sim | sim |
+| Validação de perfis | não | sim | sim |
+| Regras de acesso | RLS por compartimento de paciente | políticas de acesso | interceptors, seu código |
+
 ## Limites e roadmap
 
-- Sem validação de perfis (US Core e afins). O banco confere estrutura e ids, e não conformidade.
+- Não é um servidor FHIR: sem `GET /Patient/{id}`, sem parâmetros de busca FHIR, sem validação de perfis (US Core e afins). As RPCs e tabelas cobrem as operações comuns.
 - Sem escopos SMART on FHIR. Supabase Auth mais `patient_access` cobre apps de paciente e de profissional.
 - Multi-tenant (um banco, várias organizações) está planejado por cima do modelo de compartimentos.
 - Uma fachada FHIR REST (`GET /fhir/Patient/{id}`, `GET /fhir/Observation?patient=...`), para que SDKs
