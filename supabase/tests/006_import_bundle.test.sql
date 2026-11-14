@@ -1,6 +1,6 @@
 -- import_bundle: reference resolution, idempotency, conditional create, deletes and RLS (UC-012).
 begin;
-select plan(17);
+select plan(19);
 
 create function pg_temp.login(user_id uuid, extra_claims jsonb default '{}'::jsonb) returns void
 language plpgsql as $$
@@ -70,6 +70,14 @@ select lives_ok(
   $$select fhir.import_bundle('{"resourceType":"Bundle","type":"transaction","entry":[{"request":{"method":"DELETE","url":"Observation/44444444-4444-4444-8444-444444444444"}}]}'::jsonb)$$,
   'DELETE entries are accepted');
 select is_empty($$select 1 from fhir.observation where id = '44444444-4444-4444-8444-444444444444'$$, 'DELETE entries remove the resource');
+
+select lives_ok(
+  $$select fhir.import_bundle('{"resourceType":"Bundle","type":"transaction","entry":[
+    {"fullUrl":"urn:uuid:55555555-5555-4555-8555-555555555555","resource":{"resourceType":"Patient","identifier":[{"system":"urn:test","value":"urn:uuid:66666666-6666-4666-8666-666666666666"}]},"request":{"method":"POST","url":"Patient"}},
+    {"fullUrl":"urn:uuid:66666666-6666-4666-8666-666666666666","resource":{"resourceType":"Observation","status":"final","code":{"text":"x"},"subject":{"reference":"urn:uuid:55555555-5555-4555-8555-555555555555"}},"request":{"method":"POST","url":"Observation"}}]}'::jsonb)$$,
+  'a bundle whose identifier equals a fullUrl imports');
+select is((select resource #>> '{identifier,0,value}' from fhir.patient where id = '55555555-5555-4555-8555-555555555555'),
+  'urn:uuid:66666666-6666-4666-8666-666666666666', 'only reference values are rewritten; identifiers are left alone');
 
 -- RLS applies to imports too
 insert into auth.users (id, email) values ('00000000-0000-4000-8000-000000000d01', 'carol@test.local');

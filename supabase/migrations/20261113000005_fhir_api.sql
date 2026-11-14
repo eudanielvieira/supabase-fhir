@@ -64,6 +64,146 @@ end;
 $$;
 
 -- -----------------------------------------------------------------------------
+-- Audited access
+-- The log writers are SECURITY DEFINER so they can append to fhir.audit_log, but they
+-- never trust their arguments: log_access looks the row up and checks that the caller
+-- may read it, log_search checks the patient scope. A client cannot fabricate entries
+-- for data it cannot see. Calls with no JWT (migrations, psql, tests) or with the
+-- service role are trusted, as they bypass RLS anyway.
+-- -----------------------------------------------------------------------------
+create or replace function fhir.trusted_caller()
+returns boolean
+language sql stable
+set search_path = ''
+as $$
+  select nullif(current_setting('request.jwt.claims', true), '') is null
+      or fhir.actor_role() = 'service_role';
+$$;
+
+-- Records a read of one resource. read_resource and patient_everything call it; clients that
+-- read through the table API can call it themselves to record the access.
+create or replace function fhir.log_access(resource_type text, resource_id text)
+returns void
+language plpgsql security definer
+set search_path = ''
+as $$
+declare
+  tbl            text;
+  is_compartment boolean;
+  found_patient  text;
+  found_version  integer;
+  allowed        boolean;
+begin
+  select t.table_name, t.compartment into tbl, is_compartment
+  from fhir.resource_type t
+  where t.resource_type = $1;
+  if tbl is null then
+    perform fhir.fail('PT404', 'not-found', format('%s/%s not found', resource_type, resource_id));
+  end if;
+
+  execute format('select patient_id, version_id from fhir.%I where id = $1', tbl)
+    into found_patient, found_version
+    using resource_id;
+
+  allowed := found_version is not null and (
+    fhir.trusted_caller()
+    or (select fhir.is_admin())
+    or not is_compartment
+    or (found_patient is not null and found_patient in (select fhir.accessible_patients('read'))));
+  if not allowed then
+    perform fhir.fail('PT404', 'not-found', format('%s/%s not found', resource_type, resource_id));
+  end if;
+
+  insert into fhir.audit_log
+    (action, resource_type, resource_id, patient_id, version_id, actor_id, actor_role, request)
+  values
+    ('read', resource_type, resource_id, found_patient, found_version,
+     auth.uid(), fhir.actor_role(), fhir.request_context());
+end;
+$$;
+
+-- Records a search: the type, the patient scope, the filters and how many rows came back.
+create or replace function fhir.log_search(resource_type text, patient_id text, filters jsonb, results integer)
+returns void
+language plpgsql security definer
+set search_path = ''
+as $$
+begin
+  if patient_id is not null and not (
+    fhir.trusted_caller()
+    or (select fhir.is_admin())
+    or patient_id in (select fhir.accessible_patients('read'))) then
+    perform fhir.fail('PT404', 'not-found', format('Patient/%s not found', patient_id));
+  end if;
+  insert into fhir.audit_log
+    (action, resource_type, resource_id, patient_id, actor_id, actor_role, request)
+  values
+    ('search', resource_type, null, patient_id, auth.uid(), fhir.actor_role(),
+     fhir.request_context() || jsonb_build_object('filters', coalesce(filters, '{}'::jsonb), 'results', results));
+end;
+$$;
+
+-- Audited search over one resource table. filters is an object of column = value pairs on the
+-- table's scalar columns (the generated search columns included), for example
+-- {"code": "8302-2", "status": "final"}; a null value means "is null".
+create or replace function fhir.search_resources(
+  resource_type text,
+  patient_id text default null,
+  filters jsonb default '{}'::jsonb,
+  max_results integer default 100,
+  skip integer default 0,
+  newest_first boolean default true
+)
+returns setof jsonb
+language plpgsql
+set search_path = ''
+as $$
+declare
+  tbl        text := fhir.resource_table(resource_type);
+  conditions text[] := array['true'];
+  args       jsonb := coalesce(filters, '{}'::jsonb);
+  key        text;
+  val        jsonb;
+  col_type   text;
+  found      integer;
+begin
+  if tbl is null then
+    perform fhir.fail('PT400', 'not-supported', format('unknown resource type %s', resource_type));
+  end if;
+  if jsonb_typeof(args) <> 'object' then
+    perform fhir.fail('PT400', 'invalid', 'filters must be a JSON object of column = value pairs');
+  end if;
+  if max_results < 1 or max_results > 1000 then
+    perform fhir.fail('PT400', 'invalid', 'max_results must be between 1 and 1000');
+  end if;
+
+  for key, val in select e.key, e.value from jsonb_each(args) e loop
+    select c.data_type into col_type
+    from information_schema.columns c
+    where c.table_schema = 'fhir' and c.table_name = tbl and c.column_name = key and c.data_type <> 'jsonb';
+    if col_type is null then
+      perform fhir.fail('PT400', 'not-supported', format('%s has no search column %s', resource_type, key));
+    end if;
+    if jsonb_typeof(val) = 'null' then
+      conditions := conditions || format('%I is null', key);
+    else
+      conditions := conditions || format('%I = (%L)::%s', key, val #>> '{}', col_type);
+    end if;
+  end loop;
+  if patient_id is not null then
+    conditions := conditions || format('patient_id = %L', patient_id);
+  end if;
+
+  return query execute format(
+    'select resource from fhir.%I where %s order by last_updated %s, id limit %s offset %s',
+    tbl, array_to_string(conditions, ' and '),
+    case when newest_first then 'desc' else 'asc' end, max_results, greatest(coalesce(skip, 0), 0));
+  get diagnostics found = row_count;
+  perform fhir.log_search(resource_type, patient_id, args, found);
+end;
+$$;
+
+-- -----------------------------------------------------------------------------
 -- read / create / update / delete / history
 -- -----------------------------------------------------------------------------
 
@@ -88,7 +228,7 @@ begin
   if found_resource is null then
     perform fhir.fail('PT404', 'not-found', format('%s/%s not found', resource_type, id));
   end if;
-  perform fhir.log_access(resource_type, id, found_patient, found_version);
+  perform fhir.log_access(resource_type, id);
   return found_resource;
 end;
 $$;
@@ -225,7 +365,7 @@ begin
   if patient is null then
     perform fhir.fail('PT404', 'not-found', format('Patient/%s not found', patient_id));
   end if;
-  perform fhir.log_access('Patient', patient_id, patient_id, (patient #>> '{meta,versionId}')::integer);
+  perform fhir.log_access('Patient', patient_id);
 
   for rt in select t.table_name from fhir.resource_type t where t.compartment order by t.resource_type loop
     execute format(
@@ -374,15 +514,17 @@ begin
     end if;
 
     txt := ((entry -> 'resource') || jsonb_build_object('id', rid))::text;
-    for ref in select distinct m[1] from regexp_matches(txt, '"(urn:uuid:[0-9A-Fa-f-]{36})"', 'g') as m loop
+    -- Only reference values are rewritten: jsonb text output is canonical ("reference": "..."),
+    -- so an identifier.value that happens to equal a fullUrl is left alone.
+    for ref in select distinct m[1] from regexp_matches(txt, '"reference": "(urn:uuid:[0-9A-Fa-f-]{36})"', 'g') as m loop
       if ref_map ? ref then
-        txt := replace(txt, '"' || ref || '"', '"' || (ref_map ->> ref) || '"');
+        txt := replace(txt, '"reference": "' || ref || '"', '"reference": "' || (ref_map ->> ref) || '"');
       end if;
     end loop;
-    for ref in select distinct m[1] from regexp_matches(txt, '"reference":\s*"([A-Z][A-Za-z]+\?identifier=[^"]+)"', 'g') as m loop
+    for ref in select distinct m[1] from regexp_matches(txt, '"reference": "([A-Z][A-Za-z]+\?identifier=[^"]+)"', 'g') as m loop
       resolved := coalesce(ref_map ->> replace(ref, '%7C', '|'), fhir.resolve_conditional_reference(ref));
       if resolved is not null then
-        txt := replace(txt, '"' || ref || '"', '"' || resolved || '"');
+        txt := replace(txt, '"reference": "' || ref || '"', '"reference": "' || resolved || '"');
       end if;
     end loop;
     res := txt::jsonb;
@@ -414,6 +556,10 @@ revoke execute on function
   fhir.resource_table(text),
   fhir.find_by_identifier(text, text),
   fhir.resolve_conditional_reference(text),
+  fhir.trusted_caller(),
+  fhir.log_access(text, text),
+  fhir.log_search(text, text, jsonb, integer),
+  fhir.search_resources(text, text, jsonb, integer, integer, boolean),
   fhir.read_resource(text, text),
   fhir.create_resource(jsonb),
   fhir.update_resource(jsonb, integer),
@@ -427,6 +573,10 @@ grant execute on function
   fhir.resource_table(text),
   fhir.find_by_identifier(text, text),
   fhir.resolve_conditional_reference(text),
+  fhir.trusted_caller(),
+  fhir.log_access(text, text),
+  fhir.log_search(text, text, jsonb, integer),
+  fhir.search_resources(text, text, jsonb, integer, integer, boolean),
   fhir.read_resource(text, text),
   fhir.create_resource(jsonb),
   fhir.update_resource(jsonb, integer),

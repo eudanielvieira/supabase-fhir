@@ -208,9 +208,10 @@ grant select on fhir.resource_history to authenticated, service_role;
 create table fhir.audit_log (
   id            bigint generated always as identity primary key,
   occurred_at   timestamptz not null default now(),
-  action        text not null constraint audit_log_action check (action in ('create', 'read', 'update', 'delete')),
+  action        text not null constraint audit_log_action
+                check (action in ('create', 'read', 'update', 'delete', 'search', 'grant', 'grant_change', 'revoke')),
   resource_type text not null,
-  resource_id   text not null,
+  resource_id   text constraint audit_log_resource_id check (action = 'search' or resource_id is not null),
   patient_id    text,
   version_id    integer,
   actor_id      uuid,
@@ -218,7 +219,7 @@ create table fhir.audit_log (
   request       jsonb
 );
 comment on table fhir.audit_log is
-  'Access trail. Writes are recorded by triggers; reads through fhir.read_resource and fhir.patient_everything.';
+  'Access trail. Writes and access grant changes are recorded by triggers; reads and searches through the fhir RPCs (read_resource, patient_everything, search_resources, log_access). Identifiers only, never the payload.';
 create index audit_log_patient_idx on fhir.audit_log (patient_id, occurred_at desc);
 create index audit_log_resource_idx on fhir.audit_log (resource_type, resource_id);
 create index audit_log_actor_idx on fhir.audit_log (actor_id, occurred_at desc);
@@ -313,28 +314,6 @@ begin
 end;
 $$;
 
--- Records a read event. Called by the audited read RPCs.
-create or replace function fhir.log_access(
-  resource_type text,
-  resource_id text,
-  patient_id text,
-  version_id integer
-)
-returns void
-language plpgsql security definer
-set search_path = ''
-as $$
-begin
-  insert into fhir.audit_log
-    (action, resource_type, resource_id, patient_id, version_id, actor_id, actor_role, request)
-  values
-    ('read', resource_type, resource_id, patient_id, version_id,
-     auth.uid(), fhir.actor_role(), fhir.request_context());
-end;
-$$;
-
-revoke execute on function fhir.log_access(text, text, text, integer) from public, anon;
-grant execute on function fhir.log_access(text, text, text, integer) to authenticated, service_role;
 
 -- -----------------------------------------------------------------------------
 -- Errors as FHIR OperationOutcome

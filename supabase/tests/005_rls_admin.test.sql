@@ -1,6 +1,6 @@
 -- Admins (JWT app_metadata.fhir_role = 'admin') manage everything; user_metadata cannot fake it (UC-009).
 begin;
-select plan(9);
+select plan(12);
 
 create function pg_temp.login(user_id uuid, extra_claims jsonb default '{}'::jsonb) returns void
 language plpgsql as $$
@@ -24,6 +24,18 @@ select results_eq($$select id from fhir.patient where id like 'ra-%' order by id
 select lives_ok(
   $$insert into fhir.patient_access (user_id, patient_id, access_level) values ('00000000-0000-4000-8000-000000000c02', 'ra-1', 'read')$$,
   'admins grant access');
+update fhir.patient_access set access_level = 'write' where user_id = '00000000-0000-4000-8000-000000000c02' and patient_id = 'ra-1';
+insert into fhir.patient_access (user_id, patient_id) values ('00000000-0000-4000-8000-000000000c02', 'ra-2');
+delete from fhir.patient_access where user_id = '00000000-0000-4000-8000-000000000c02' and patient_id = 'ra-2';
+select results_eq(
+  $$select action from fhir.audit_log where resource_type = 'PatientAccess' and patient_id = 'ra-1' order by id$$,
+  $$values ('grant'), ('grant_change')$$,
+  'granting and changing access is audited');
+select results_eq(
+  $$select action from fhir.audit_log where resource_type = 'PatientAccess' and patient_id = 'ra-2' order by id$$,
+  $$values ('grant'), ('revoke')$$,
+  'revoking access is audited');
+select lives_ok($$select fhir.delete_resource('Patient', 'ra-2')$$, 'admins can delete a Patient');
 select lives_ok(
   $$insert into fhir.organization (resource) values ('{"resourceType":"Organization","id":"ra-org","name":"Admin Clinic"}')$$,
   'admins write reference data');

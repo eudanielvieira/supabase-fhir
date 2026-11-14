@@ -68,27 +68,27 @@ begin
   if p_compartment then
     execute format($sql$
       create policy fhir_select on fhir.%I for select to authenticated
-        using (fhir.is_admin() or patient_id in (select fhir.accessible_patients('read')))$sql$, tbl);
+        using ((select fhir.is_admin()) or patient_id in (select fhir.accessible_patients('read')))$sql$, tbl);
     execute format($sql$
       create policy fhir_insert on fhir.%I for insert to authenticated
-        with check (fhir.is_admin() or patient_id in (select fhir.accessible_patients('write')))$sql$, tbl);
+        with check ((select fhir.is_admin()) or patient_id in (select fhir.accessible_patients('write')))$sql$, tbl);
     execute format($sql$
       create policy fhir_update on fhir.%I for update to authenticated
-        using (fhir.is_admin() or patient_id in (select fhir.accessible_patients('write')))
-        with check (fhir.is_admin() or patient_id in (select fhir.accessible_patients('write')))$sql$, tbl);
+        using ((select fhir.is_admin()) or patient_id in (select fhir.accessible_patients('write')))
+        with check ((select fhir.is_admin()) or patient_id in (select fhir.accessible_patients('write')))$sql$, tbl);
     execute format($sql$
       create policy fhir_delete on fhir.%I for delete to authenticated
-        using (fhir.is_admin() or patient_id in (select fhir.accessible_patients('write')))$sql$, tbl);
+        using ((select fhir.is_admin()) or patient_id in (select fhir.accessible_patients('write')))$sql$, tbl);
   else
     execute format($sql$
       create policy fhir_select on fhir.%I for select to authenticated using (true)$sql$, tbl);
     execute format($sql$
-      create policy fhir_insert on fhir.%I for insert to authenticated with check (fhir.is_admin())$sql$, tbl);
+      create policy fhir_insert on fhir.%I for insert to authenticated with check ((select fhir.is_admin()))$sql$, tbl);
     execute format($sql$
       create policy fhir_update on fhir.%I for update to authenticated
-        using (fhir.is_admin()) with check (fhir.is_admin())$sql$, tbl);
+        using ((select fhir.is_admin())) with check ((select fhir.is_admin()))$sql$, tbl);
     execute format($sql$
-      create policy fhir_delete on fhir.%I for delete to authenticated using (fhir.is_admin())$sql$, tbl);
+      create policy fhir_delete on fhir.%I for delete to authenticated using ((select fhir.is_admin()))$sql$, tbl);
   end if;
 
   execute format('grant select, insert, update, delete on fhir.%I to authenticated, service_role', tbl);

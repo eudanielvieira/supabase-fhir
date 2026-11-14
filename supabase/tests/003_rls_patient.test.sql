@@ -1,6 +1,6 @@
 -- A patient portal user sees only their own compartment; anon sees nothing (UC-007, UC-011, UC-006).
 begin;
-select plan(17);
+select plan(22);
 
 create function pg_temp.login(user_id uuid, extra_claims jsonb default '{}'::jsonb) returns void
 language plpgsql as $$
@@ -56,12 +56,21 @@ select throws_ok($$select fhir.read_resource('Patient', 'rls-p2')$$, 'PT404', nu
 select is((select fhir.read_resource('Patient', 'rls-p1') ->> 'id'), 'rls-p1', 'read_resource returns own resources');
 select throws_ok($$select fhir.patient_everything('rls-p2')$$, 'PT404', null, 'patient_everything answers 404 outside the compartment');
 select is((select (fhir.patient_everything('rls-p1') ->> 'total')::int), 2, 'patient_everything returns the compartment (Patient + Observation)');
+select throws_ok($$select fhir.log_access('Patient', 'rls-p2')$$, 'PT404', null, 'log_access refuses to record reads of invisible resources');
+select lives_ok($$select fhir.log_access('Observation', 'rls-o1')$$, 'log_access records a read of a visible resource');
+select results_eq($$select r ->> 'id' from fhir.search_resources('Observation') r$$, $$values ('rls-o1')$$, 'search_resources only returns the own compartment');
+select throws_ok($$select fhir.search_resources('Observation', 'rls-p2')$$, 'PT404', null, 'search_resources refuses a patient scope the user cannot see');
 
 -- anon: nothing at all
 select pg_temp.logout();
 set local role anon;
 select throws_ok($$select count(*) from fhir.patient$$, '42501', null, 'anon cannot touch the fhir schema');
 reset role;
+
+select results_eq(
+  $$select action, resource_type from fhir.audit_log where actor_id = '00000000-0000-4000-8000-000000000a01' order by id$$,
+  $$values ('read', 'Patient'), ('read', 'Patient'), ('read', 'Observation'), ('search', 'Observation')$$,
+  'reads and searches are attributed to the actor, refused calls leave no trace');
 
 select * from finish();
 rollback;

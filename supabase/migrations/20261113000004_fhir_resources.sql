@@ -35,6 +35,13 @@ select fhir.define_resource('Claim');
 select fhir.define_resource('ExplanationOfBenefit');
 select fhir.define_resource('Provenance');
 
+-- Deleting a Patient removes its grants (cascade) and orphans its clinical resources,
+-- so only admins may do it. Clinicians with write access still update demographics.
+drop policy fhir_delete on fhir.patient;
+create policy fhir_delete on fhir.patient
+  for delete to authenticated
+  using ((select fhir.is_admin()));
+
 -- Access grants point at real patients and disappear with them.
 alter table fhir.patient_access
   add constraint patient_access_patient_fk

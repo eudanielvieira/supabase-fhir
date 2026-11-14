@@ -1,7 +1,7 @@
 -- A clinician reads and writes only the compartments granted to them, while the grant is valid
 -- (UC-008, UC-010, UC-017).
 begin;
-select plan(15);
+select plan(19);
 
 create function pg_temp.login(user_id uuid, extra_claims jsonb default '{}'::jsonb) returns void
 language plpgsql as $$
@@ -69,6 +69,12 @@ select throws_ok(
   '42501', null, 'clinicians cannot grant themselves access');
 select is((select (fhir.patient_everything('rp-1') ->> 'total')::int), 2, 'patient_everything covers the granted compartment');
 select throws_ok($$select fhir.patient_everything('rp-3')$$, 'PT404', null, 'patient_everything answers 404 once a grant expired');
+
+delete from fhir.patient where id = 'rp-1';
+select isnt_empty($$select 1 from fhir.patient where id = 'rp-1'$$, 'a write grant cannot delete the Patient itself (row untouched)');
+select throws_ok($$select fhir.delete_resource('Patient', 'rp-1')$$, '42501', null, 'deleting a Patient answers 403 for non-admins');
+select is((select count(*)::int from fhir.search_resources('Patient', null, '{"family_name": "Write"}')), 1, 'search_resources filters on generated columns inside the visible compartments');
+select is((select count(*)::int from fhir.search_resources('Patient', null, '{"family_name": "NoGrant"}')), 0, 'search_resources never leaks other compartments');
 
 select * from finish();
 rollback;

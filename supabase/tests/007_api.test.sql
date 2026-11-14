@@ -1,6 +1,6 @@
 -- RPC surface: create / read / update / delete / history and the helper functions (UC-003, UC-015).
 begin;
-select plan(22);
+select plan(26);
 
 select is(fhir.table_name('MedicationRequest'), 'medication_request', 'table_name converts PascalCase to snake_case');
 select is(fhir.table_name('ExplanationOfBenefit'), 'explanation_of_benefit', 'table_name handles three words');
@@ -44,6 +44,14 @@ select results_eq(
   $$values (2, 'delete'), (1, 'update')$$,
   'history keeps deleted resources');
 select is((select count(*)::int from fhir.audit_log where resource_id = 'api-1'), 3, 'create, update and delete through the API are audited');
+
+insert into fhir.patient (resource) values
+  ('{"resourceType":"Patient","id":"api-s1","name":[{"family":"Search"}],"birthDate":"1990-01-01"}'),
+  ('{"resourceType":"Patient","id":"api-s2","name":[{"family":"Search"}],"birthDate":"2000-02-02"}');
+select is((select count(*)::int from fhir.search_resources('Patient', null, '{"family_name": "Search"}')), 2, 'search_resources filters on text columns');
+select is((select count(*)::int from fhir.search_resources('Patient', null, '{"family_name": "Search", "birth_date": "2000-02-02"}')), 1, 'search_resources casts filter values to the column type');
+select throws_ok($$select fhir.search_resources('Patient', null, '{"nope": 1}')$$, 'PT400', null, 'unknown search columns are rejected');
+select is((select request ->> 'results' from fhir.audit_log where action = 'search' order by id desc limit 1), '1', 'searches are audited with their result count');
 
 select is(fhir.define_resource('Specimen'), 'specimen', 'define_resource creates a new resource table');
 select ok(

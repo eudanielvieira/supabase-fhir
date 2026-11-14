@@ -73,19 +73,49 @@ alter table fhir.patient_access enable row level security;
 
 create policy "users read their own grants" on fhir.patient_access
   for select to authenticated
-  using (user_id = (select auth.uid()) or fhir.is_admin());
+  using (user_id = (select auth.uid()) or (select fhir.is_admin()));
 
 create policy "admins manage grants" on fhir.patient_access
   for all to authenticated
-  using (fhir.is_admin())
-  with check (fhir.is_admin());
+  using ((select fhir.is_admin()))
+  with check ((select fhir.is_admin()));
 
 grant select, insert, update, delete on fhir.patient_access to authenticated, service_role;
 
 create policy "history visible within compartment" on fhir.resource_history
   for select to authenticated
-  using (fhir.is_admin() or patient_id in (select fhir.accessible_patients('read')));
+  using ((select fhir.is_admin()) or patient_id in (select fhir.accessible_patients('read')));
 
 create policy "audit log visible to admins" on fhir.audit_log
   for select to authenticated
-  using (fhir.is_admin());
+  using ((select fhir.is_admin()));
+
+-- -----------------------------------------------------------------------------
+-- Every change to a grant is itself audited: who had access to whom, and when.
+-- -----------------------------------------------------------------------------
+create or replace function fhir.audit_access_change()
+returns trigger
+language plpgsql security definer
+set search_path = ''
+as $$
+begin
+  if tg_op = 'DELETE' then
+    insert into fhir.audit_log (action, resource_type, resource_id, patient_id, actor_id, actor_role, request)
+    values ('revoke', 'PatientAccess', old.id::text, old.patient_id, auth.uid(), fhir.actor_role(),
+            fhir.request_context() || jsonb_build_object('before', to_jsonb(old)));
+  elsif tg_op = 'UPDATE' then
+    insert into fhir.audit_log (action, resource_type, resource_id, patient_id, actor_id, actor_role, request)
+    values ('grant_change', 'PatientAccess', new.id::text, new.patient_id, auth.uid(), fhir.actor_role(),
+            fhir.request_context() || jsonb_build_object('before', to_jsonb(old), 'after', to_jsonb(new)));
+  else
+    insert into fhir.audit_log (action, resource_type, resource_id, patient_id, actor_id, actor_role, request)
+    values ('grant', 'PatientAccess', new.id::text, new.patient_id, auth.uid(), fhir.actor_role(),
+            fhir.request_context() || jsonb_build_object('after', to_jsonb(new)));
+  end if;
+  return null;
+end;
+$$;
+
+create trigger fhir_audit_access_change
+  after insert or update or delete on fhir.patient_access
+  for each row execute function fhir.audit_access_change();
